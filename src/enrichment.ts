@@ -369,9 +369,16 @@ export async function enrichBatch(
     }
 
     try {
-      // Validate Haiku data
+      // Validate Haiku data against allowed values (LLM trust boundary)
+      const VALID_SENTIMENTS = new Set(['bullish', 'bearish', 'neutral']);
+      const VALID_THEMES = new Set([
+        'semis', 'geopolitics', 'macro', 'ai_infra', 'crypto',
+        'options', 'energy', 'china_asia', 'other',
+      ]);
+
       if (
         !haikuData.sentiment ||
+        !VALID_SENTIMENTS.has(haikuData.sentiment) ||
         !haikuData.themes ||
         haikuData.themes.length === 0
       ) {
@@ -417,8 +424,12 @@ export async function enrichBatch(
         });
       }
 
-      // Build themes
-      const themes: Theme[] = haikuData.themes.map((th) => ({
+      // Build themes (filter to valid values only)
+      const validatedThemes = haikuData.themes.filter((th) => VALID_THEMES.has(th));
+      if (validatedThemes.length === 0) {
+        throw new Error(`No valid themes for tweet ${tweet.id}`);
+      }
+      const themes: Theme[] = validatedThemes.map((th) => ({
         tweet_id: tweet.id,
         theme: th,
       }));
@@ -428,7 +439,7 @@ export async function enrichBatch(
         entities,
         themes,
         sentiment: haikuData.sentiment,
-        sentiment_confidence: haikuData.sentiment_confidence ?? 0.5,
+        sentiment_confidence: Math.max(0, Math.min(1, Number(haikuData.sentiment_confidence) || 0.5)),
         novelty_score: noveltyScore,
         summary: (haikuData.summary ?? '').slice(0, 100),
       });

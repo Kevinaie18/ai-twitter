@@ -77,8 +77,10 @@ export function createDashboard(port: number, env: Record<string, string>) {
   app.get('/api/search', (c) => {
     const query = c.req.query('q') || '';
     const limit = parseInt(c.req.query('limit') || '50');
-    if (!query) return c.json({ results: [] });
-    const results = db.searchTweetsFTS(query, limit);
+    // Sanitize FTS5 query syntax to prevent malformed/expensive queries
+    const sanitized = query.replace(/['"():*^~]/g, ' ').trim();
+    if (!sanitized) return c.json({ results: [] });
+    const results = db.searchTweetsFTS(sanitized, Math.min(limit, 100));
     return c.json({ results });
   });
 

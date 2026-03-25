@@ -666,7 +666,8 @@ body{background:var(--bg);color:var(--text)}
   function esc(s) {
     const d = document.createElement('div');
     d.textContent = s;
-    return d.innerHTML;
+    // Also escape single quotes and backslashes for safe use in onclick='...' attributes
+    return d.innerHTML.replace(/'/g, '&#39;').replace(/\\/g, '&#92;');
   }
 
   function fmtNum(n) {
