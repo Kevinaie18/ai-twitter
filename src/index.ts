@@ -1,7 +1,7 @@
 import { schedule } from 'node-cron';
 import { Bot } from 'grammy';
 import { loadConfig, loadEnv, getRequiredEnv } from './config.js';
-import { initDb, getUnenrichedTweets, getLastScrapedTweetId, getScrapeHealth, syncCredibilityTags } from './db.js';
+import { initDb, getUnenrichedTweets, getLastScrapedTweetId, getScrapeHealth, syncCredibilityTags, syncListConfigs } from './db.js';
 import { discoverQueryHash, scrapeList } from './scraper.js';
 import { enrichBatch } from './enrichment.js';
 import { generateDigest } from './digest.js';
@@ -27,6 +27,7 @@ async function main() {
 
   // Init database
   initDb('data/intel.db');
+  syncListConfigs(config);
   syncCredibilityTags(config);
   console.log('[init] Database ready');
 

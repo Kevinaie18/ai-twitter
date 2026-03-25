@@ -682,6 +682,28 @@ export function insertPriceData(ticker: string, date: string, close: number): vo
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// ─── List Config Sync ────────────────────────────────────────────────────────
+
+export function syncListConfigs(config: Config): void {
+  const upsert = db.prepare(`
+    INSERT INTO list_configs (list_id, name, scrape_interval_min, active, added_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(list_id) DO UPDATE SET
+      name = excluded.name,
+      scrape_interval_min = excluded.scrape_interval_min,
+      active = excluded.active
+  `);
+
+  const tx = db.transaction(() => {
+    // Deactivate all lists first, then re-activate the ones in config
+    db.prepare(`UPDATE list_configs SET active = 0`).run();
+    for (const list of config.lists) {
+      upsert.run(list.id, list.name, list.scrape_interval_min || 120, list.active ? 1 : 0, new Date().toISOString());
+    }
+  });
+  tx();
+}
+
 // ─── Credibility Tag Sync ────────────────────────────────────────────────────
 
 export function syncCredibilityTags(config: Config): void {
