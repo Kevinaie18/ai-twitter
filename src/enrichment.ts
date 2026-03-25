@@ -1,5 +1,6 @@
 import { OpenRouter } from '@openrouter/sdk';
 import type { Tweet, Entity, Theme, Config } from './types.js';
+import { ENRICHMENT_SYSTEM } from './prompts.js';
 import {
   getDb,
   getUnenrichedTweets,
@@ -105,29 +106,6 @@ export function getDailyCost(): DailyCostEntry {
 
 // ─── Haiku entity extraction ────────────────────────────────────────────────
 
-const HAIKU_SYSTEM_PROMPT = `You are a financial tweet analyst. You extract structured information from tweets about markets, investing, and finance.
-
-For each tweet provided, extract:
-- entities: { tickers: string[], countries: string[], people: string[], topics: string[] }
-- themes: array of one or more from: ["semis", "geopolitics", "macro", "ai_infra", "crypto", "options", "energy", "china_asia", "other"]
-- sentiment: "bullish" | "bearish" | "neutral"
-- sentiment_confidence: 0.0 to 1.0
-- summary: one-line summary (max 100 chars)
-
-Respond with valid JSON matching this schema exactly:
-{
-  "tweets": [
-    {
-      "tweet_id": "string",
-      "entities": { "tickers": [], "countries": [], "people": [], "topics": [] },
-      "themes": [],
-      "sentiment": "bullish" | "bearish" | "neutral",
-      "sentiment_confidence": 0.0,
-      "summary": "string"
-    }
-  ]
-}`;
-
 async function callHaiku(
   apiKey: string,
   tweets: Tweet[],
@@ -147,7 +125,7 @@ async function callHaiku(
     model: 'anthropic/claude-haiku-4.5',
     maxTokens: 4096,
     messages: [
-      { role: 'system' as const, content: HAIKU_SYSTEM_PROMPT },
+      { role: 'system' as const, content: ENRICHMENT_SYSTEM },
       {
         role: 'user' as const,
         content: `Analyze the following ${tweets.length} tweet(s) and return structured JSON:\n\n${JSON.stringify(tweetsPayload, null, 2)}`,

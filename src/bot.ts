@@ -13,6 +13,7 @@ import {
   getAuthorTrackRecord,
 } from './db.js';
 import type { ConsensusSnapshot } from './types.js';
+import { ASK_SYSTEM, THEME_SYNTHESIS_SYSTEM, WHO_SYNTHESIS_SYSTEM } from './prompts.js';
 import { getDailyCost } from './enrichment.js';
 
 // ─── Telegram Helpers ────────────────────────────────────────────────────────
@@ -168,7 +169,7 @@ async function askSonnet(
     model: 'anthropic/claude-sonnet-4.6',
     maxTokens: 1024,
     messages: [
-      { role: 'system' as const, content: `You are a financial intelligence assistant. Answer the user's question based ONLY on the provided tweets. Be concise and specific. Cite sources using @handle references. If the tweets don't contain enough information to answer, say so clearly.` },
+      { role: 'system' as const, content: ASK_SYSTEM },
       {
         role: 'user' as const,
         content: `Question: ${query}\n\nHere are the ${tweets.length} most relevant tweets from our database:\n\n${tweetContext}\n\nProvide a concise, specific answer with @handle citations.`,
@@ -457,7 +458,7 @@ export function createBot(token: string, env: Record<string, string>): Bot {
       // AI synthesis: summarize the theme data into actionable intelligence
       const synthesis = await synthesizeWithHaiku(
         openrouterKey,
-        `You are a financial intelligence analyst. Summarize this theme data into 3-4 sentences of actionable intelligence. Focus on: what the consensus is, who the key voices are, what's the debate, and what to watch next. Be concise and specific. Use @handles.`,
+        THEME_SYNTHESIS_SYSTEM,
         rawData,
       );
 
@@ -567,7 +568,7 @@ export function createBot(token: string, env: Record<string, string>): Bot {
       // AI synthesis: characterize this account in 2-3 sentences
       const synthesis = await synthesizeWithHaiku(
         openrouterKey,
-        `You are a financial intelligence analyst. Based on this account profile, write a 2-3 sentence characterization: what kind of voice is this person (macro trader, sector specialist, news aggregator, contrarian), what's their typical conviction level, and how reliable are they based on the data. Be direct and specific.`,
+        WHO_SYNTHESIS_SYSTEM,
         rawData,
       );
 
