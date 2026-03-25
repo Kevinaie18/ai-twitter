@@ -1,0 +1,1367 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Twitter Intel Digest</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+/* ─── Reset ───────────────────────────────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:13px;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;overflow:hidden;height:100vh}
+button{cursor:pointer;border:none;background:none;font:inherit;color:inherit}
+input{font:inherit;color:inherit}
+a{color:inherit;text-decoration:none}
+
+/* ─── Theme tokens ────────────────────────────────────────────────────────── */
+[data-theme="dark"]{
+  --bg:#0a0a0a;--surface:#141414;--surface2:#1a1a1a;--surface3:#1e1e1e;
+  --border:#262626;--border2:#333;
+  --text:#fafafa;--text2:#a1a1a1;--text3:#737373;
+  --bullish:#22c55e;--bullish-bg:rgba(34,197,94,.08);
+  --bearish:#ef4444;--bearish-bg:rgba(239,68,68,.08);
+  --neutral:#737373;--neutral-bg:rgba(115,115,115,.08);
+  --accent:#3b82f6;--accent-bg:rgba(59,130,246,.08);
+  --alert:#f59e0b;--alert-bg:rgba(245,158,11,.08);
+  --scrollbar:#333;--scrollbar-thumb:#555;
+}
+[data-theme="light"]{
+  --bg:#fafafa;--surface:#ffffff;--surface2:#f5f5f5;--surface3:#efefef;
+  --border:#e5e5e5;--border2:#d4d4d4;
+  --text:#0a0a0a;--text2:#737373;--text3:#a1a1a1;
+  --bullish:#16a34a;--bullish-bg:rgba(22,163,74,.06);
+  --bearish:#dc2626;--bearish-bg:rgba(220,38,38,.06);
+  --neutral:#737373;--neutral-bg:rgba(115,115,115,.06);
+  --accent:#2563eb;--accent-bg:rgba(37,99,235,.06);
+  --alert:#d97706;--alert-bg:rgba(217,119,6,.06);
+  --scrollbar:#ddd;--scrollbar-thumb:#bbb;
+}
+
+body{background:var(--bg);color:var(--text)}
+
+/* ─── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:var(--scrollbar)}
+::-webkit-scrollbar-thumb{background:var(--scrollbar-thumb);border-radius:3px}
+
+/* ─── Mono class ──────────────────────────────────────────────────────────── */
+.mono{font-family:'JetBrains Mono',monospace}
+
+/* ─── Layout ──────────────────────────────────────────────────────────────── */
+.app{display:flex;height:100vh;overflow:hidden}
+
+/* Sidebar */
+.sidebar{
+  width:200px;min-width:200px;background:var(--surface);
+  border-right:1px solid var(--border);display:flex;flex-direction:column;
+  overflow:hidden;z-index:100;
+}
+.sidebar-header{
+  padding:16px 14px 12px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:8px;
+}
+.sidebar-logo{
+  width:28px;height:28px;background:var(--accent);border-radius:6px;
+  display:flex;align-items:center;justify-content:center;
+  font-weight:700;font-size:14px;color:#fff;flex-shrink:0;
+}
+.sidebar-title{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sidebar-nav{flex:1;padding:8px 6px;display:flex;flex-direction:column;gap:1px}
+.nav-item{
+  display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;
+  font-size:12.5px;font-weight:500;color:var(--text2);transition:all .15s;
+  min-height:36px;
+}
+.nav-item:hover{background:var(--surface2);color:var(--text)}
+.nav-item.active{background:var(--accent-bg);color:var(--accent)}
+.nav-icon{width:18px;height:18px;flex-shrink:0;opacity:.7}
+.nav-item.active .nav-icon{opacity:1}
+.sidebar-footer{padding:8px 6px;border-top:1px solid var(--border)}
+
+/* Main content */
+.main{flex:1;overflow-y:auto;overflow-x:hidden}
+.page{display:none;padding:20px 24px 40px;max-width:1400px}
+.page.active{display:block}
+
+/* ─── Header bar ──────────────────────────────────────────────────────────── */
+.page-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding-bottom:16px;border-bottom:1px solid var(--border);margin-bottom:20px;
+  flex-wrap:wrap;gap:10px;
+}
+.page-title{font-size:16px;font-weight:600;letter-spacing:-.02em}
+.page-subtitle{font-size:11px;color:var(--text3);margin-top:2px}
+
+/* ─── Controls ────────────────────────────────────────────────────────────── */
+.controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.btn{
+  padding:5px 10px;border-radius:5px;font-size:11px;font-weight:500;
+  background:var(--surface2);color:var(--text2);border:1px solid var(--border);
+  transition:all .15s;
+}
+.btn:hover{background:var(--surface3);color:var(--text)}
+.btn.active{background:var(--accent-bg);color:var(--accent);border-color:var(--accent)}
+.input{
+  padding:6px 10px;border-radius:5px;font-size:12px;
+  background:var(--surface);color:var(--text);border:1px solid var(--border);
+  outline:none;transition:border-color .15s;
+}
+.input:focus{border-color:var(--accent)}
+.input::placeholder{color:var(--text3)}
+
+/* ─── Cards / Panels ─────────────────────────────────────────────────────── */
+.panel{
+  background:var(--surface);border:1px solid var(--border);border-radius:8px;
+  overflow:hidden;
+}
+.panel-header{
+  padding:10px 14px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+  font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text2);
+}
+.panel-body{padding:14px}
+.panel-body.no-pad{padding:0}
+
+/* ─── Grid layouts ────────────────────────────────────────────────────────── */
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px}
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.stack{display:flex;flex-direction:column;gap:16px}
+
+/* ─── Stats row ───────────────────────────────────────────────────────────── */
+.stat-row{display:flex;gap:12px;flex-wrap:wrap}
+.stat-card{
+  flex:1;min-width:140px;background:var(--surface);border:1px solid var(--border);
+  border-radius:8px;padding:12px 14px;
+}
+.stat-label{font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text3);margin-bottom:4px}
+.stat-value{font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:600;line-height:1.1}
+.stat-sub{font-size:10px;color:var(--text3);margin-top:4px}
+
+/* ─── Consensus alerts ────────────────────────────────────────────────────── */
+.alert-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.alert-card{
+  padding:12px 14px;border-radius:8px;border:1px solid var(--border);
+  display:flex;align-items:flex-start;gap:10px;cursor:pointer;transition:all .15s;
+}
+.alert-card:hover{border-color:var(--border2);transform:translateY(-1px)}
+.alert-card.bullish{background:var(--bullish-bg);border-color:rgba(34,197,94,.15)}
+.alert-card.bearish{background:var(--bearish-bg);border-color:rgba(239,68,68,.15)}
+.alert-card.neutral{background:var(--neutral-bg)}
+.alert-arrow{
+  font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:700;
+  line-height:1;flex-shrink:0;width:24px;text-align:center;
+}
+.alert-card.bullish .alert-arrow{color:var(--bullish)}
+.alert-card.bearish .alert-arrow{color:var(--bearish)}
+.alert-card.neutral .alert-arrow{color:var(--neutral)}
+.alert-info{flex:1;min-width:0}
+.alert-theme{font-size:12px;font-weight:600;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.alert-pct{font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700}
+.alert-meta{font-size:10px;color:var(--text3);margin-top:2px}
+
+/* ─── Heatmap ─────────────────────────────────────────────────────────────── */
+.heatmap{display:flex;flex-wrap:wrap;gap:4px;padding:4px}
+.heatmap-cell{
+  border-radius:4px;padding:6px 8px;cursor:pointer;transition:all .15s;
+  min-width:60px;text-align:center;font-size:11px;font-weight:500;
+  border:1px solid transparent;
+}
+.heatmap-cell:hover{transform:scale(1.04);border-color:var(--border2)}
+.heatmap-cell .cell-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:120px}
+.heatmap-cell .cell-count{font-family:'JetBrains Mono',monospace;font-size:10px;opacity:.7;margin-top:2px}
+
+/* ─── Table ───────────────────────────────────────────────────────────────── */
+.data-table{width:100%;border-collapse:collapse;font-size:12px}
+.data-table th{
+  padding:8px 12px;text-align:left;font-weight:600;font-size:10px;
+  text-transform:uppercase;letter-spacing:.04em;color:var(--text3);
+  border-bottom:1px solid var(--border);cursor:pointer;user-select:none;
+  position:sticky;top:0;background:var(--surface);z-index:1;
+}
+.data-table th:hover{color:var(--text)}
+.data-table td{padding:8px 12px;border-bottom:1px solid var(--border)}
+.data-table tr:hover td{background:var(--surface2)}
+.data-table .sort-arrow{font-size:9px;margin-left:4px;opacity:.5}
+.table-wrap{max-height:400px;overflow-y:auto}
+
+/* ─── Sentiment badges ────────────────────────────────────────────────────── */
+.badge{
+  display:inline-flex;align-items:center;gap:3px;
+  padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;
+  font-family:'JetBrains Mono',monospace;
+}
+.badge.bullish{background:var(--bullish-bg);color:var(--bullish)}
+.badge.bearish{background:var(--bearish-bg);color:var(--bearish)}
+.badge.neutral{background:var(--neutral-bg);color:var(--neutral)}
+.badge.accent{background:var(--accent-bg);color:var(--accent)}
+
+/* ─── Tweet cards ─────────────────────────────────────────────────────────── */
+.tweet-card{
+  padding:12px 14px;border:1px solid var(--border);border-radius:8px;
+  background:var(--surface);transition:border-color .15s;
+}
+.tweet-card:hover{border-color:var(--border2)}
+.tweet-header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.tweet-author{font-weight:600;font-size:12px}
+.tweet-handle{color:var(--text3);font-size:11px}
+.tweet-date{color:var(--text3);font-size:10px;margin-left:auto;font-family:'JetBrains Mono',monospace}
+.tweet-text{font-size:12px;line-height:1.5;color:var(--text);margin-bottom:8px;white-space:pre-wrap;word-break:break-word}
+.tweet-footer{display:flex;align-items:center;gap:12px;font-size:10px;color:var(--text3);font-family:'JetBrains Mono',monospace}
+.tweet-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+
+/* ─── Chart container ─────────────────────────────────────────────────────── */
+.chart-container{width:100%;height:300px;position:relative}
+.chart-container.tall{height:400px}
+
+/* ─── Search ──────────────────────────────────────────────────────────────── */
+.search-bar{display:flex;gap:8px;margin-bottom:20px}
+.search-bar .input{flex:1;padding:10px 14px;font-size:14px;border-radius:8px}
+.search-results{display:flex;flex-direction:column;gap:10px}
+
+/* ─── Health indicators ───────────────────────────────────────────────────── */
+.health-dot{
+  width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0;
+}
+.health-dot.green{background:#22c55e;box-shadow:0 0 6px rgba(34,197,94,.4)}
+.health-dot.yellow{background:#f59e0b;box-shadow:0 0 6px rgba(245,158,11,.4)}
+.health-dot.red{background:#ef4444;box-shadow:0 0 6px rgba(239,68,68,.4)}
+.health-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)}
+.health-row:last-child{border-bottom:none}
+.health-label{font-size:12px;font-weight:500;flex:1}
+.health-value{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text2)}
+
+/* ─── Empty state ─────────────────────────────────────────────────────────── */
+.empty{
+  padding:40px 20px;text-align:center;color:var(--text3);font-size:13px;
+}
+.empty-icon{font-size:32px;margin-bottom:8px;opacity:.3}
+
+/* ─── Loading ─────────────────────────────────────────────────────────────── */
+.loading{display:flex;align-items:center;justify-content:center;padding:40px}
+.spinner{
+  width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--accent);
+  border-radius:50%;animation:spin .6s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ─── Modal ───────────────────────────────────────────────────────────────── */
+.modal-overlay{
+  position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:500;
+  display:none;align-items:center;justify-content:center;padding:20px;
+}
+.modal-overlay.active{display:flex}
+.modal{
+  background:var(--surface);border:1px solid var(--border);border-radius:12px;
+  width:100%;max-width:600px;max-height:80vh;overflow-y:auto;
+}
+.modal-header{
+  padding:16px 20px;border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.modal-title{font-weight:600;font-size:14px}
+.modal-close{
+  width:28px;height:28px;display:flex;align-items:center;justify-content:center;
+  border-radius:6px;font-size:16px;color:var(--text3);
+}
+.modal-close:hover{background:var(--surface2);color:var(--text)}
+.modal-body{padding:20px}
+
+/* ─── Mobile bottom nav ───────────────────────────────────────────────────── */
+.bottom-nav{
+  display:none;position:fixed;bottom:0;left:0;right:0;
+  background:var(--surface);border-top:1px solid var(--border);
+  z-index:100;padding:4px 0;padding-bottom:env(safe-area-inset-bottom,4px);
+}
+.bottom-nav-inner{display:flex;justify-content:space-around}
+.bottom-nav-item{
+  display:flex;flex-direction:column;align-items:center;gap:2px;
+  padding:6px 12px;font-size:9px;font-weight:500;color:var(--text3);
+  min-height:44px;justify-content:center;min-width:44px;
+}
+.bottom-nav-item.active{color:var(--accent)}
+.bottom-nav-item svg{width:20px;height:20px}
+
+/* ─── Responsive ──────────────────────────────────────────────────────────── */
+@media(max-width:1024px){
+  .sidebar{width:56px;min-width:56px}
+  .sidebar-title,.nav-label,.sidebar-footer{display:none}
+  .sidebar-header{padding:12px 10px;justify-content:center}
+  .nav-item{padding:10px;justify-content:center}
+  .nav-icon{margin:0}
+  .grid-2{grid-template-columns:1fr}
+  .grid-3{grid-template-columns:1fr 1fr}
+  .grid-4{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:640px){
+  .sidebar{display:none}
+  .bottom-nav{display:block}
+  .main{padding-bottom:64px}
+  .page{padding:14px 14px 80px}
+  .grid-2,.grid-3,.grid-4{grid-template-columns:1fr}
+  .alert-grid{grid-template-columns:1fr}
+  .stat-row{flex-direction:column}
+  .stat-card{min-width:unset}
+  .page-header{flex-direction:column;align-items:flex-start}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ─── Sidebar (desktop/tablet) ──────────────────────────────────────── -->
+  <nav class="sidebar" role="navigation" aria-label="Main navigation">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">T</div>
+      <span class="sidebar-title">Intel Digest</span>
+    </div>
+    <div class="sidebar-nav">
+      <button class="nav-item active" data-page="dashboard" aria-label="Dashboard">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        <span class="nav-label">Dashboard</span>
+      </button>
+      <button class="nav-item" data-page="themes" aria-label="Themes">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+        <span class="nav-label">Themes</span>
+      </button>
+      <button class="nav-item" data-page="accounts" aria-label="Accounts">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <span class="nav-label">Accounts</span>
+      </button>
+      <button class="nav-item" data-page="search" aria-label="Search">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <span class="nav-label">Search</span>
+      </button>
+      <button class="nav-item" data-page="settings" aria-label="Settings">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="nav-label">Settings</span>
+      </button>
+    </div>
+    <div class="sidebar-footer">
+      <button class="nav-item" id="theme-toggle" aria-label="Toggle theme">
+        <svg class="nav-icon" id="theme-icon-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="nav-icon" id="theme-icon-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <span class="nav-label">Theme</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ─── Main content ──────────────────────────────────────────────────── -->
+  <div class="main" id="main-content">
+
+    <!-- ═══ DASHBOARD PAGE ══════════════════════════════════════════════ -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Dashboard</div>
+          <div class="page-subtitle" id="dash-subtitle">Loading...</div>
+        </div>
+        <div class="controls">
+          <button class="btn active" data-range="1" onclick="setDashRange(1)">24h</button>
+          <button class="btn" data-range="7" onclick="setDashRange(7)">7d</button>
+          <button class="btn" data-range="30" onclick="setDashRange(30)">30d</button>
+        </div>
+      </div>
+
+      <!-- Stats row -->
+      <div class="stat-row" id="dash-stats" style="margin-bottom:20px">
+        <div class="stat-card">
+          <div class="stat-label">Themes Tracked</div>
+          <div class="stat-value mono" id="stat-themes">--</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Consensus Alerts</div>
+          <div class="stat-value mono" id="stat-alerts">--</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Scrape Health</div>
+          <div class="stat-value mono" id="stat-health">--</div>
+          <div class="stat-sub" id="stat-health-sub"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Last Updated</div>
+          <div class="stat-value mono" style="font-size:14px" id="stat-updated">--</div>
+        </div>
+      </div>
+
+      <!-- Consensus alerts -->
+      <div class="panel" style="margin-bottom:20px">
+        <div class="panel-header">Consensus Signals</div>
+        <div class="panel-body">
+          <div class="alert-grid" id="consensus-alerts">
+            <div class="loading"><div class="spinner"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Two columns: heatmap + chart -->
+      <div class="grid-2" style="margin-bottom:20px">
+        <div class="panel">
+          <div class="panel-header">Theme Heatmap</div>
+          <div class="panel-body no-pad">
+            <div class="heatmap" id="theme-heatmap">
+              <div class="loading"><div class="spinner"></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">Sentiment Trend</div>
+          <div class="panel-body no-pad">
+            <div class="chart-container" id="dash-chart"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ THEMES PAGE ═════════════════════════════════════════════════ -->
+    <div class="page" id="page-themes">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Themes</div>
+          <div class="page-subtitle">Drill into specific narratives</div>
+        </div>
+        <div class="controls">
+          <button class="btn active" data-range="7" onclick="setThemeRange(7)">7d</button>
+          <button class="btn" data-range="30" onclick="setThemeRange(30)">30d</button>
+        </div>
+      </div>
+
+      <!-- Theme selector -->
+      <div id="theme-tabs" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:20px"></div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header">Sentiment Over Time</div>
+          <div class="panel-body no-pad">
+            <div class="chart-container tall" id="theme-chart"></div>
+          </div>
+        </div>
+        <div class="stack">
+          <div class="panel">
+            <div class="panel-header">Top Tweets</div>
+            <div class="panel-body no-pad">
+              <div class="table-wrap" id="theme-tweets-table">
+                <div class="empty">Select a theme to view tweets</div>
+              </div>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-header">Key Accounts</div>
+            <div class="panel-body" id="theme-accounts">
+              <div class="empty">Select a theme</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ ACCOUNTS PAGE ═══════════════════════════════════════════════ -->
+    <div class="page" id="page-accounts">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Accounts</div>
+          <div class="page-subtitle">Tracked accounts and their signal</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-body no-pad">
+          <div class="table-wrap" style="max-height:calc(100vh - 180px)" id="accounts-table-wrap">
+            <table class="data-table" id="accounts-table">
+              <thead>
+                <tr>
+                  <th data-sort="author_handle">Handle</th>
+                  <th data-sort="author_name">Name</th>
+                  <th data-sort="follower_count">Followers</th>
+                  <th data-sort="last_seen_at">Last Active</th>
+                </tr>
+              </thead>
+              <tbody id="accounts-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ SEARCH PAGE ═════════════════════════════════════════════════ -->
+    <div class="page" id="page-search">
+      <div class="page-header">
+        <div>
+          <div class="page-title">Search</div>
+          <div class="page-subtitle">Full-text search across all tweets</div>
+        </div>
+      </div>
+      <div class="search-bar">
+        <input class="input" id="search-input" type="text" placeholder="Search tweets..." autofocus>
+        <button class="btn" onclick="doSearch()" style="padding:10px 20px;font-size:13px">Search</button>
+      </div>
+      <div class="search-results" id="search-results">
+        <div class="empty">
+          <div class="empty-icon">&#x1F50D;</div>
+          Enter a query to search tweets
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ SETTINGS PAGE ═══════════════════════════════════════════════ -->
+    <div class="page" id="page-settings">
+      <div class="page-header">
+        <div>
+          <div class="page-title">System Status</div>
+          <div class="page-subtitle">Health monitoring and diagnostics</div>
+        </div>
+        <div class="controls">
+          <button class="btn" onclick="loadSettings()">Refresh</button>
+        </div>
+      </div>
+
+      <div class="grid-2">
+        <div class="panel">
+          <div class="panel-header">Scraper Health</div>
+          <div class="panel-body" id="health-scrapers">
+            <div class="loading"><div class="spinner"></div></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">System Info</div>
+          <div class="panel-body" id="health-system">
+            <div class="loading"><div class="spinner"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- ─── Mobile bottom nav ───────────────────────────────────────────────── -->
+<nav class="bottom-nav" role="navigation" aria-label="Mobile navigation">
+  <div class="bottom-nav-inner">
+    <button class="bottom-nav-item active" data-page="dashboard" aria-label="Dashboard">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </button>
+    <button class="bottom-nav-item" data-page="themes" aria-label="Themes">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+      Themes
+    </button>
+    <button class="bottom-nav-item" data-page="accounts" aria-label="Accounts">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+      Accounts
+    </button>
+    <button class="bottom-nav-item" data-page="search" aria-label="Search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+      Search
+    </button>
+    <button class="bottom-nav-item" data-page="settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72 1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+      Settings
+    </button>
+  </div>
+</nav>
+
+<!-- ─── Account detail modal ──────────────────────────────────────────── -->
+<div class="modal-overlay" id="account-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="modal-account-title">Account</div>
+      <button class="modal-close" onclick="closeModal()">&times;</button>
+    </div>
+    <div class="modal-body" id="modal-account-body">
+      <div class="loading"><div class="spinner"></div></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// Twitter Intel Digest — Client-side Application
+// ═══════════════════════════════════════════════════════════════════════════
+
+(function() {
+  'use strict';
+
+  // ─── State ──────────────────────────────────────────────────────────────
+  const state = {
+    dashDays: 7,
+    themeDays: 7,
+    selectedTheme: null,
+    listId: '',  // default, could be populated from config
+    overview: null,
+    charts: {},
+    sortCol: 'follower_count',
+    sortDir: 'desc',
+  };
+
+  // ─── API helpers ────────────────────────────────────────────────────────
+  async function api(path, params = {}) {
+    const url = new URL(path, location.origin);
+    if (state.listId) params.list_id = state.listId;
+    Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`API ${res.status}: ${path}`);
+    return res.json();
+  }
+
+  // ─── Navigation ─────────────────────────────────────────────────────────
+  const pages = ['dashboard', 'themes', 'accounts', 'search', 'settings'];
+
+  function navigate(page) {
+    if (!pages.includes(page)) page = 'dashboard';
+    location.hash = page;
+
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.getElementById('page-' + page)?.classList.add('active');
+
+    document.querySelectorAll('.nav-item[data-page], .bottom-nav-item[data-page]').forEach(el => {
+      el.classList.toggle('active', el.dataset.page === page);
+    });
+
+    // Lazy load page data
+    if (page === 'dashboard') loadDashboard();
+    else if (page === 'themes') loadThemes();
+    else if (page === 'accounts') loadAccounts();
+    else if (page === 'settings') loadSettings();
+  }
+
+  // Bind nav clicks
+  document.querySelectorAll('[data-page]').forEach(el => {
+    el.addEventListener('click', () => navigate(el.dataset.page));
+  });
+
+  // Hash routing
+  window.addEventListener('hashchange', () => {
+    navigate(location.hash.replace('#', '') || 'dashboard');
+  });
+
+  // ─── Theme toggle ──────────────────────────────────────────────────────
+  const themeToggle = document.getElementById('theme-toggle');
+  themeToggle.addEventListener('click', () => {
+    const html = document.documentElement;
+    const isDark = html.getAttribute('data-theme') === 'dark';
+    html.setAttribute('data-theme', isDark ? 'light' : 'dark');
+    document.getElementById('theme-icon-dark').style.display = isDark ? 'none' : '';
+    document.getElementById('theme-icon-light').style.display = isDark ? '' : 'none';
+    localStorage.setItem('theme', isDark ? 'light' : 'dark');
+    // Recreate charts with new theme
+    Object.values(state.charts).forEach(c => { try { c.remove(); } catch(e) {} });
+    state.charts = {};
+    const activePage = document.querySelector('.page.active')?.id?.replace('page-', '');
+    if (activePage === 'dashboard') loadDashboard();
+    else if (activePage === 'themes' && state.selectedTheme) loadThemeDetail(state.selectedTheme);
+  });
+
+  // Restore saved theme
+  const saved = localStorage.getItem('theme');
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+    document.getElementById('theme-icon-dark').style.display = saved === 'dark' ? '' : 'none';
+    document.getElementById('theme-icon-light').style.display = saved === 'dark' ? 'none' : '';
+  }
+
+  // ─── Utility ────────────────────────────────────────────────────────────
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  function fmtNum(n) {
+    if (n == null) return '--';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+    return n.toLocaleString();
+  }
+
+  function fmtDate(iso) {
+    if (!iso) return '--';
+    const d = new Date(iso);
+    const now = Date.now();
+    const diff = now - d.getTime();
+    if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+    if (diff < 604800000) return Math.floor(diff / 86400000) + 'd ago';
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  function fmtDateShort(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function sentimentClass(s) {
+    if (!s) return 'neutral';
+    const l = s.toLowerCase();
+    if (l === 'bullish' || l === 'positive') return 'bullish';
+    if (l === 'bearish' || l === 'negative') return 'bearish';
+    return 'neutral';
+  }
+
+  function sentimentArrow(dir) {
+    if (!dir) return '—';
+    const l = dir.toLowerCase();
+    if (l === 'bullish' || l === 'positive') return '\u25B2';
+    if (l === 'bearish' || l === 'negative') return '\u25BC';
+    return '\u2014';
+  }
+
+  function getChartColors() {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    return {
+      bg: isDark ? '#141414' : '#ffffff',
+      text: isDark ? '#a1a1a1' : '#737373',
+      grid: isDark ? '#1e1e1e' : '#f0f0f0',
+      border: isDark ? '#262626' : '#e5e5e5',
+      crosshair: isDark ? '#555' : '#ccc',
+    };
+  }
+
+  function createChart(containerId, height) {
+    const container = document.getElementById(containerId);
+    if (!container) return null;
+    container.innerHTML = '';
+
+    if (typeof LightweightCharts === 'undefined') {
+      container.innerHTML = '<div class="empty">Charts library not loaded</div>';
+      return null;
+    }
+
+    const colors = getChartColors();
+    const chart = LightweightCharts.createChart(container, {
+      width: container.clientWidth,
+      height: height || 300,
+      layout: {
+        background: { type: 'solid', color: colors.bg },
+        textColor: colors.text,
+        fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 10,
+      },
+      grid: {
+        vertLines: { color: colors.grid },
+        horzLines: { color: colors.grid },
+      },
+      crosshair: {
+        vertLine: { color: colors.crosshair, width: 1, style: 3 },
+        horzLine: { color: colors.crosshair, width: 1, style: 3 },
+      },
+      rightPriceScale: {
+        borderColor: colors.border,
+      },
+      timeScale: {
+        borderColor: colors.border,
+        timeVisible: true,
+      },
+      handleScroll: { vertTouchDrag: false },
+    });
+
+    // Responsive resize
+    const ro = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        chart.applyOptions({ width: entry.contentRect.width });
+      }
+    });
+    ro.observe(container);
+
+    return chart;
+  }
+
+  // ─── DASHBOARD PAGE ─────────────────────────────────────────────────────
+  let dashLoading = false;
+
+  async function loadDashboard() {
+    if (dashLoading) return;
+    dashLoading = true;
+
+    try {
+      const data = await api('/api/overview', { days: state.dashDays });
+      state.overview = data;
+
+      // Update subtitle
+      document.getElementById('dash-subtitle').textContent =
+        `${data.themes?.length || 0} active themes \u00B7 ${state.dashDays === 1 ? '24h' : state.dashDays + 'd'} window`;
+
+      // Stats
+      document.getElementById('stat-themes').textContent = data.themes?.length || 0;
+      document.getElementById('stat-alerts').textContent = data.consensus?.length || 0;
+
+      const totalHealth = (data.health || []).reduce((s, h) => s + h.tweet_count, 0);
+      document.getElementById('stat-health').textContent = totalHealth > 0 ? 'Active' : 'Idle';
+      document.getElementById('stat-health').style.color = totalHealth > 0 ? 'var(--bullish)' : 'var(--alert)';
+      document.getElementById('stat-health-sub').textContent =
+        totalHealth > 0 ? `${totalHealth} tweets/2h` : 'No recent scrapes';
+
+      document.getElementById('stat-updated').textContent = new Date().toLocaleTimeString();
+
+      // Consensus alerts
+      renderConsensusAlerts(data.consensus || []);
+
+      // Heatmap
+      renderHeatmap(data.themes || [], data.consensus || []);
+
+      // Sentiment chart — show consensus history for top themes
+      await renderDashChart(data.consensus || []);
+
+    } catch (err) {
+      console.error('Dashboard load error:', err);
+      document.getElementById('consensus-alerts').innerHTML =
+        '<div class="empty">Failed to load data. Is the API running?</div>';
+    } finally {
+      dashLoading = false;
+    }
+  }
+
+  function renderConsensusAlerts(consensus) {
+    const el = document.getElementById('consensus-alerts');
+    if (!consensus.length) {
+      el.innerHTML = '<div class="empty">No consensus signals yet. Data will appear after enrichment runs.</div>';
+      return;
+    }
+
+    el.innerHTML = consensus.map(c => {
+      const cls = sentimentClass(c.consensus_direction);
+      const arrow = sentimentArrow(c.consensus_direction);
+      const pct = Math.round(c.consensus_pct * 100);
+      return `
+        <div class="alert-card ${cls}" onclick="navigateToTheme('${esc(c.theme)}')">
+          <div class="alert-arrow">${arrow}</div>
+          <div class="alert-info">
+            <div class="alert-theme">${esc(c.theme)}</div>
+            <div class="alert-pct">${pct}%</div>
+            <div class="alert-meta">${c.total_accounts} accounts \u00B7 ${c.bullish_count}B ${c.bearish_count}R ${c.neutral_count}N</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderHeatmap(themes, consensus) {
+    const el = document.getElementById('theme-heatmap');
+    if (!themes.length) {
+      el.innerHTML = '<div class="empty" style="width:100%">No themes detected yet</div>';
+      return;
+    }
+
+    // Build a map of theme → consensus direction for coloring
+    const dirMap = {};
+    consensus.forEach(c => { dirMap[c.theme] = c.consensus_direction; });
+
+    el.innerHTML = themes.map(theme => {
+      const dir = dirMap[theme] || '';
+      const cls = sentimentClass(dir);
+      let bg, color;
+      if (cls === 'bullish') { bg = 'var(--bullish-bg)'; color = 'var(--bullish)'; }
+      else if (cls === 'bearish') { bg = 'var(--bearish-bg)'; color = 'var(--bearish)'; }
+      else { bg = 'var(--neutral-bg)'; color = 'var(--text2)'; }
+
+      return `
+        <div class="heatmap-cell" style="background:${bg};color:${color}"
+             onclick="navigateToTheme('${esc(theme)}')">
+          <div class="cell-name">${esc(theme)}</div>
+          <div class="cell-count">${sentimentArrow(dir)}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function renderDashChart(consensus) {
+    // Destroy old chart
+    if (state.charts.dash) { try { state.charts.dash.remove(); } catch(e) {} }
+    state.charts.dash = null;
+
+    if (!consensus.length) {
+      document.getElementById('dash-chart').innerHTML =
+        '<div class="empty">No consensus data for charting</div>';
+      return;
+    }
+
+    const chart = createChart('dash-chart', 300);
+    if (!chart) return;
+    state.charts.dash = chart;
+
+    const lineColors = ['#3b82f6', '#22c55e', '#ef4444', '#f59e0b', '#a855f7', '#06b6d4', '#ec4899'];
+    const topThemes = consensus.slice(0, 5);
+
+    for (let i = 0; i < topThemes.length; i++) {
+      const c = topThemes[i];
+      try {
+        const res = await api('/api/consensus-history', { theme: c.theme, days: state.dashDays });
+        const snapshots = (res.snapshots || []).sort((a, b) => a.snapshot_at.localeCompare(b.snapshot_at));
+        if (!snapshots.length) continue;
+
+        const series = chart.addLineSeries({
+          color: lineColors[i % lineColors.length],
+          lineWidth: 2,
+          title: c.theme.length > 20 ? c.theme.slice(0, 18) + '..' : c.theme,
+          priceFormat: { type: 'percent' },
+        });
+
+        series.setData(snapshots.map(s => ({
+          time: Math.floor(new Date(s.snapshot_at).getTime() / 1000),
+          value: s.consensus_pct * 100,
+        })));
+      } catch (e) {
+        console.warn('Chart data error for', c.theme, e);
+      }
+    }
+
+    chart.timeScale().fitContent();
+  }
+
+  window.setDashRange = function(days) {
+    state.dashDays = days;
+    document.querySelectorAll('#page-dashboard .controls .btn').forEach(b => {
+      b.classList.toggle('active', parseInt(b.dataset.range) === days);
+    });
+    loadDashboard();
+  };
+
+  window.navigateToTheme = function(theme) {
+    state.selectedTheme = theme;
+    navigate('themes');
+    loadThemeDetail(theme);
+  };
+
+  // ─── THEMES PAGE ────────────────────────────────────────────────────────
+  async function loadThemes() {
+    try {
+      const data = await api('/api/themes', { days: state.themeDays });
+      const themes = data.themes || [];
+      const tabsEl = document.getElementById('theme-tabs');
+
+      if (!themes.length) {
+        tabsEl.innerHTML = '<div class="empty" style="width:100%">No themes found</div>';
+        return;
+      }
+
+      tabsEl.innerHTML = themes.map(t =>
+        `<button class="btn ${state.selectedTheme === t ? 'active' : ''}"
+                 onclick="selectTheme('${esc(t)}')">${esc(t)}</button>`
+      ).join('');
+
+      // Auto-select first theme if none selected
+      if (!state.selectedTheme || !themes.includes(state.selectedTheme)) {
+        selectTheme(themes[0]);
+      } else {
+        loadThemeDetail(state.selectedTheme);
+      }
+    } catch (err) {
+      console.error('Themes load error:', err);
+    }
+  }
+
+  window.selectTheme = function(theme) {
+    state.selectedTheme = theme;
+    document.querySelectorAll('#theme-tabs .btn').forEach(b => {
+      b.classList.toggle('active', b.textContent === theme);
+    });
+    loadThemeDetail(theme);
+  };
+
+  async function loadThemeDetail(theme) {
+    try {
+      const data = await api('/api/theme/' + encodeURIComponent(theme), { days: state.themeDays });
+
+      // Chart
+      if (state.charts.theme) { try { state.charts.theme.remove(); } catch(e) {} }
+      state.charts.theme = null;
+
+      const snapshots = (data.snapshots || []).sort((a, b) => a.snapshot_at.localeCompare(b.snapshot_at));
+      if (snapshots.length) {
+        const chart = createChart('theme-chart', 380);
+        if (chart) {
+          state.charts.theme = chart;
+
+          // Bullish line
+          const bullSeries = chart.addLineSeries({
+            color: '#22c55e', lineWidth: 2, title: 'Bullish %',
+            priceFormat: { type: 'percent' },
+          });
+          bullSeries.setData(snapshots.map(s => ({
+            time: Math.floor(new Date(s.snapshot_at).getTime() / 1000),
+            value: s.total_accounts > 0 ? (s.bullish_count / s.total_accounts) * 100 : 0,
+          })));
+
+          // Bearish line
+          const bearSeries = chart.addLineSeries({
+            color: '#ef4444', lineWidth: 2, title: 'Bearish %',
+            priceFormat: { type: 'percent' },
+          });
+          bearSeries.setData(snapshots.map(s => ({
+            time: Math.floor(new Date(s.snapshot_at).getTime() / 1000),
+            value: s.total_accounts > 0 ? (s.bearish_count / s.total_accounts) * 100 : 0,
+          })));
+
+          // Consensus line
+          const conSeries = chart.addLineSeries({
+            color: '#3b82f6', lineWidth: 2, title: 'Consensus %',
+            lineStyle: 2,
+            priceFormat: { type: 'percent' },
+          });
+          conSeries.setData(snapshots.map(s => ({
+            time: Math.floor(new Date(s.snapshot_at).getTime() / 1000),
+            value: s.consensus_pct * 100,
+          })));
+
+          chart.timeScale().fitContent();
+        }
+      } else {
+        document.getElementById('theme-chart').innerHTML =
+          '<div class="empty">No consensus snapshots for this theme</div>';
+      }
+
+      // Tweets table
+      const tweets = data.tweets || [];
+      const tweetsEl = document.getElementById('theme-tweets-table');
+      if (!tweets.length) {
+        tweetsEl.innerHTML = '<div class="empty">No tweets for this theme</div>';
+      } else {
+        const sorted = tweets.sort((a, b) =>
+          (b.engagement_likes + b.engagement_retweets) - (a.engagement_likes + a.engagement_retweets)
+        );
+        tweetsEl.innerHTML = `
+          <table class="data-table">
+            <thead><tr>
+              <th>Author</th>
+              <th>Text</th>
+              <th>Sentiment</th>
+              <th>Engagement</th>
+              <th>Date</th>
+            </tr></thead>
+            <tbody>
+              ${sorted.slice(0, 30).map(t => `
+                <tr>
+                  <td><strong>@${esc(t.author_handle)}</strong></td>
+                  <td style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(t.text)}">${esc(t.text?.slice(0, 120) || '')}</td>
+                  <td><span class="badge ${sentimentClass(t.sentiment)}">${sentimentArrow(t.sentiment)} ${esc(t.sentiment || 'N/A')}</span></td>
+                  <td class="mono">${fmtNum(t.engagement_likes + t.engagement_retweets)}</td>
+                  <td class="mono" style="font-size:10px">${fmtDate(t.created_at)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      // Key accounts — extract unique authors from tweets
+      const acctMap = {};
+      tweets.forEach(t => {
+        if (!acctMap[t.author_id]) {
+          acctMap[t.author_id] = { handle: t.author_handle, name: t.author_name, count: 0, sentiments: {} };
+        }
+        acctMap[t.author_id].count++;
+        const s = t.sentiment || 'neutral';
+        acctMap[t.author_id].sentiments[s] = (acctMap[t.author_id].sentiments[s] || 0) + 1;
+      });
+      const accounts = Object.entries(acctMap)
+        .sort((a, b) => b[1].count - a[1].count)
+        .slice(0, 15);
+
+      const acctEl = document.getElementById('theme-accounts');
+      if (!accounts.length) {
+        acctEl.innerHTML = '<div class="empty">No accounts</div>';
+      } else {
+        acctEl.innerHTML = accounts.map(([id, a]) => {
+          const dominant = Object.entries(a.sentiments).sort((x, y) => y[1] - x[1])[0];
+          const cls = dominant ? sentimentClass(dominant[0]) : 'neutral';
+          return `
+            <div class="health-row" style="cursor:pointer" onclick="openAccountModal('${esc(id)}')">
+              <div>
+                <strong>@${esc(a.handle)}</strong>
+                <span style="color:var(--text3);font-size:11px;margin-left:6px">${esc(a.name)}</span>
+              </div>
+              <span class="badge ${cls}">${a.count} tweets</span>
+            </div>
+          `;
+        }).join('');
+      }
+
+    } catch (err) {
+      console.error('Theme detail error:', err);
+    }
+  }
+
+  window.setThemeRange = function(days) {
+    state.themeDays = days;
+    document.querySelectorAll('#page-themes .controls .btn').forEach(b => {
+      b.classList.toggle('active', parseInt(b.dataset.range) === days);
+    });
+    loadThemes();
+  };
+
+  // ─── ACCOUNTS PAGE ──────────────────────────────────────────────────────
+  let accountsData = [];
+
+  async function loadAccounts() {
+    try {
+      const data = await api('/api/accounts');
+      accountsData = data.accounts || [];
+      renderAccountsTable();
+    } catch (err) {
+      console.error('Accounts load error:', err);
+      document.getElementById('accounts-tbody').innerHTML =
+        '<tr><td colspan="4"><div class="empty">Failed to load accounts</div></td></tr>';
+    }
+  }
+
+  function renderAccountsTable() {
+    const sorted = [...accountsData].sort((a, b) => {
+      let va = a[state.sortCol], vb = b[state.sortCol];
+      if (typeof va === 'string') va = va.toLowerCase();
+      if (typeof vb === 'string') vb = vb.toLowerCase();
+      if (va < vb) return state.sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return state.sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    const tbody = document.getElementById('accounts-tbody');
+    if (!sorted.length) {
+      tbody.innerHTML = '<tr><td colspan="4"><div class="empty">No accounts found</div></td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = sorted.map(a => `
+      <tr style="cursor:pointer" onclick="openAccountModal('${esc(a.author_id)}')">
+        <td><strong>@${esc(a.author_handle)}</strong></td>
+        <td>${esc(a.author_name)}</td>
+        <td class="mono">${fmtNum(a.follower_count)}</td>
+        <td class="mono" style="font-size:10px">${fmtDate(a.last_seen_at)}</td>
+      </tr>
+    `).join('');
+
+    // Update sort indicators
+    document.querySelectorAll('#accounts-table th').forEach(th => {
+      const col = th.dataset.sort;
+      const existing = th.querySelector('.sort-arrow');
+      if (existing) existing.remove();
+      if (col === state.sortCol) {
+        th.insertAdjacentHTML('beforeend',
+          `<span class="sort-arrow">${state.sortDir === 'asc' ? '\u25B2' : '\u25BC'}</span>`
+        );
+      }
+    });
+  }
+
+  // Table sorting
+  document.querySelectorAll('#accounts-table th[data-sort]').forEach(th => {
+    th.addEventListener('click', () => {
+      const col = th.dataset.sort;
+      if (state.sortCol === col) {
+        state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.sortCol = col;
+        state.sortDir = col === 'follower_count' ? 'desc' : 'asc';
+      }
+      renderAccountsTable();
+    });
+  });
+
+  // Account modal
+  window.openAccountModal = async function(authorId) {
+    const modal = document.getElementById('account-modal');
+    const title = document.getElementById('modal-account-title');
+    const body = document.getElementById('modal-account-body');
+
+    modal.classList.add('active');
+    title.textContent = 'Loading...';
+    body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+    try {
+      const data = await api('/api/account/' + encodeURIComponent(authorId));
+      const s = data.stats;
+      if (!s) {
+        title.textContent = 'Not Found';
+        body.innerHTML = '<div class="empty">Account data not available</div>';
+        return;
+      }
+
+      title.textContent = '@' + (s.author_handle || authorId);
+
+      const topThemes = (s.top_themes || []).slice(0, 5);
+      const sentLean = s.sentiment_lean || [];
+
+      body.innerHTML = `
+        <div class="stat-row" style="margin-bottom:16px">
+          <div class="stat-card">
+            <div class="stat-label">Tweets</div>
+            <div class="stat-value mono">${fmtNum(s.tweet_count)}</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-label">Followers</div>
+            <div class="stat-value mono">${fmtNum(s.follower_count)}</div>
+          </div>
+        </div>
+        <div style="margin-bottom:16px">
+          <div class="stat-label" style="margin-bottom:8px">Sentiment Distribution</div>
+          ${sentLean.map(sl => `
+            <div class="health-row">
+              <span class="badge ${sentimentClass(sl.sentiment)}">${sentimentArrow(sl.sentiment)} ${esc(sl.sentiment)}</span>
+              <span class="mono health-value">${sl.count} tweets</span>
+            </div>
+          `).join('') || '<div style="color:var(--text3);font-size:12px">No enriched tweets</div>'}
+        </div>
+        <div>
+          <div class="stat-label" style="margin-bottom:8px">Top Themes</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${topThemes.map(t =>
+              `<span class="badge accent" style="cursor:pointer" onclick="closeModal();navigateToTheme('${esc(t.theme)}')">${esc(t.theme)} (${t.count})</span>`
+            ).join('') || '<span style="color:var(--text3);font-size:12px">No themes</span>'}
+          </div>
+        </div>
+        <div style="margin-top:12px;font-size:10px;color:var(--text3)">
+          First seen: ${fmtDateShort(s.first_seen_at)} &middot; Last seen: ${fmtDateShort(s.last_seen_at)}
+        </div>
+      `;
+    } catch (err) {
+      console.error('Account modal error:', err);
+      title.textContent = 'Error';
+      body.innerHTML = '<div class="empty">Failed to load account data</div>';
+    }
+  };
+
+  window.closeModal = function() {
+    document.getElementById('account-modal').classList.remove('active');
+  };
+
+  // Close modal on overlay click
+  document.getElementById('account-modal').addEventListener('click', function(e) {
+    if (e.target === this) closeModal();
+  });
+
+  // Close modal on Escape
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeModal();
+  });
+
+  // ─── SEARCH PAGE ────────────────────────────────────────────────────────
+  window.doSearch = async function() {
+    const query = document.getElementById('search-input').value.trim();
+    if (!query) return;
+
+    const el = document.getElementById('search-results');
+    el.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+    try {
+      const data = await api('/api/search', { q: query, limit: 50 });
+      const results = data.results || [];
+
+      if (!results.length) {
+        el.innerHTML = '<div class="empty">No results found</div>';
+        return;
+      }
+
+      el.innerHTML = results.map(t => `
+        <div class="tweet-card">
+          <div class="tweet-header">
+            <span class="tweet-author">${esc(t.author_name || '')}</span>
+            <span class="tweet-handle">@${esc(t.author_handle || '')}</span>
+            ${t.sentiment ? `<span class="badge ${sentimentClass(t.sentiment)}" style="margin-left:8px">${sentimentArrow(t.sentiment)} ${esc(t.sentiment)}</span>` : ''}
+            <span class="tweet-date">${fmtDate(t.created_at)}</span>
+          </div>
+          <div class="tweet-text">${esc(t.text || '')}</div>
+          <div class="tweet-footer">
+            <span>\u2764 ${fmtNum(t.engagement_likes)}</span>
+            <span>\u21BB ${fmtNum(t.engagement_retweets)}</span>
+            <span>\u{1F4AC} ${fmtNum(t.engagement_replies)}</span>
+            ${t.summary ? `<span style="margin-left:auto;color:var(--text3);font-style:italic;font-family:Inter,sans-serif;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.summary)}</span>` : ''}
+          </div>
+        </div>
+      `).join('');
+    } catch (err) {
+      console.error('Search error:', err);
+      el.innerHTML = '<div class="empty">Search failed. Check query syntax.</div>';
+    }
+  };
+
+  // Search on Enter
+  document.getElementById('search-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') doSearch();
+  });
+
+  // ─── SETTINGS PAGE ─────────────────────────────────────────────────────
+  window.loadSettings = async function() {
+    try {
+      const data = await api('/api/health');
+      const health = data.health || [];
+
+      // Scraper health
+      const scrapersEl = document.getElementById('health-scrapers');
+      if (!health.length) {
+        scrapersEl.innerHTML = `
+          <div class="health-row">
+            <span class="health-dot yellow"></span>
+            <span class="health-label">No scrape data in last 2 hours</span>
+            <span class="health-value">Idle</span>
+          </div>
+        `;
+      } else {
+        scrapersEl.innerHTML = health.map(h => `
+          <div class="health-row">
+            <span class="health-dot ${h.tweet_count > 0 ? 'green' : 'red'}"></span>
+            <span class="health-label">List: ${esc(h.list_id)}</span>
+            <span class="health-value">${h.tweet_count} tweets/2h</span>
+          </div>
+        `).join('');
+      }
+
+      // System info
+      const sysEl = document.getElementById('health-system');
+      sysEl.innerHTML = `
+        <div class="health-row">
+          <span class="health-dot green"></span>
+          <span class="health-label">Dashboard Server</span>
+          <span class="health-value">Running</span>
+        </div>
+        <div class="health-row">
+          <span class="health-dot green"></span>
+          <span class="health-label">API Response</span>
+          <span class="health-value">OK</span>
+        </div>
+        <div class="health-row">
+          <span class="health-dot green"></span>
+          <span class="health-label">Last Health Check</span>
+          <span class="health-value mono">${fmtDateShort(data.timestamp)}</span>
+        </div>
+      `;
+    } catch (err) {
+      console.error('Settings load error:', err);
+      document.getElementById('health-scrapers').innerHTML =
+        '<div class="empty">Failed to load health data</div>';
+      document.getElementById('health-system').innerHTML = `
+        <div class="health-row">
+          <span class="health-dot red"></span>
+          <span class="health-label">API</span>
+          <span class="health-value">Error</span>
+        </div>
+      `;
+    }
+  };
+
+  // ─── Keyboard navigation ────────────────────────────────────────────────
+  document.addEventListener('keydown', (e) => {
+    // Ctrl/Cmd + K for search
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      navigate('search');
+      setTimeout(() => document.getElementById('search-input')?.focus(), 100);
+    }
+    // Number keys 1-5 for pages
+    if (!e.metaKey && !e.ctrlKey && !e.altKey && document.activeElement?.tagName !== 'INPUT') {
+      const num = parseInt(e.key);
+      if (num >= 1 && num <= 5) {
+        navigate(pages[num - 1]);
+      }
+    }
+  });
+
+  // ─── Init ───────────────────────────────────────────────────────────────
+  const initialPage = location.hash.replace('#', '') || 'dashboard';
+  navigate(initialPage);
+
+})();
+</script>
+</body>
+</html>

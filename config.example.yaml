@@ -1,0 +1,24 @@
+# Twitter Intel Digest Configuration
+lists:
+  - id: "2001952451281531011"
+    name: "Fintwit Macro"
+    scrape_interval_min: 30
+    active: true
+
+digest:
+  timezone: "UTC"
+  morning_hour: 7
+  evening_hour: 18
+
+consensus:
+  threshold_pct: 80
+
+enrichment:
+  batch_size: 25
+  max_tweets_per_scrape: 500
+
+dashboard:
+  port: 3000
+
+scraper:
+  max_pages_per_scrape: 10
