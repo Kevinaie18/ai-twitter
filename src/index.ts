@@ -7,7 +7,7 @@ import { enrichBatch } from './enrichment.js';
 import { generateDigest } from './digest.js';
 import { createBot, sendDigest, sendAlert } from './bot.js';
 import { createDashboard } from './dashboard/index.js';
-import { resolveOpenCalls } from './intelligence.js';
+import { resolveOpenCalls, setThemeTickerOverrides } from './intelligence.js';
 import type { Config } from './types.js';
 
 // Global error handlers
@@ -29,6 +29,7 @@ async function main() {
   initDb('data/intel.db');
   syncListConfigs(config);
   syncCredibilityTags(config);
+  if (config.theme_tickers) setThemeTickerOverrides(config.theme_tickers);
   console.log('[init] Database ready');
 
   // Init Telegram bot

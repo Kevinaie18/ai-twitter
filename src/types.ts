@@ -41,6 +41,7 @@ export interface Config {
     credibility_tags?: Record<string, CredibilityTag>;
     default_tag?: CredibilityTag; // default 'unverified'
   };
+  theme_tickers?: Record<string, string[]>;  // custom theme → ticker mapping for backtesting
   track_record?: {
     enabled?: boolean;            // default false
     resolution_days?: number;     // default 5

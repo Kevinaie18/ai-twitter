@@ -11,8 +11,10 @@ import {
 import type { ConsensusSnapshot, Config, DigestSnapshot, DigestDelta } from './types.js';
 
 // ─── Theme-to-ticker mapping for backtesting ─────────────────────────────────
+// Core themes have default tickers. Custom themes discovered by the LLM
+// can be mapped via config.theme_tickers in config.yaml.
 
-const THEME_TICKER_MAP: Record<string, string[]> = {
+const DEFAULT_THEME_TICKER_MAP: Record<string, string[]> = {
   energy: ['CL=F', 'BZ=F'],
   crypto: ['BTC-USD', 'ETH-USD'],
   semis: ['SOXX', 'NVDA', 'AMD'],
@@ -24,6 +26,13 @@ const THEME_TICKER_MAP: Record<string, string[]> = {
   fixed_income: ['TLT', 'IEF', 'HYG'],
   earnings: ['SPY', 'QQQ'],
 };
+
+// Merged at runtime with config overrides
+let THEME_TICKER_MAP: Record<string, string[]> = { ...DEFAULT_THEME_TICKER_MAP };
+
+export function setThemeTickerOverrides(overrides: Record<string, string[]>): void {
+  THEME_TICKER_MAP = { ...DEFAULT_THEME_TICKER_MAP, ...overrides };
+}
 
 // ─── Consensus Snapshot Generation ───────────────────────────────────────────
 

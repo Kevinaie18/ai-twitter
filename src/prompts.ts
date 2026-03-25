@@ -49,9 +49,9 @@ EXTRACTION RULES:
    - people: Public figures discussed in the tweet (not the author). Use full names.
    - topics: Specific sub-topics not captured by themes (e.g., "TSMC earnings", "10Y yield", "oil inventories").
 
-2. THEMES — assign one or more from this fixed set:
-   ["semis", "geopolitics", "macro", "ai_infra", "crypto", "options", "energy", "china_asia", "fixed_income", "earnings", "other"]
-   - Use "other" sparingly. If a tweet fits no theme, it likely shouldn't be in a financial feed.
+2. THEMES — assign one or more. Use CORE themes when they fit, add CUSTOM themes when needed.
+   CORE (stable taxonomy): ["semis", "geopolitics", "macro", "ai_infra", "crypto", "options", "energy", "china_asia", "fixed_income", "earnings"]
+   CUSTOM: If a tweet's primary topic doesn't fit any core theme, create a descriptive snake_case tag (e.g., "biotech", "real_estate", "defense", "commodities_agriculture", "fintech"). Be consistent — reuse the same tag across tweets on the same topic. Do NOT use "other" — always create a specific custom theme instead.
 
 3. SENTIMENT
    - sentiment: The author's directional stance — "bullish", "bearish", or "neutral".

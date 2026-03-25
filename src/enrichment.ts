@@ -21,19 +21,7 @@ interface HaikuTweetResult {
     people: string[];
     topics: string[];
   };
-  themes: Array<
-    | 'semis'
-    | 'geopolitics'
-    | 'macro'
-    | 'ai_infra'
-    | 'crypto'
-    | 'options'
-    | 'energy'
-    | 'china_asia'
-    | 'fixed_income'
-    | 'earnings'
-    | 'other'
-  >;
+  themes: string[];
   sentiment: 'bullish' | 'bearish' | 'neutral';
   sentiment_confidence: number;
   sentiment_reasoning?: string;
@@ -358,10 +346,6 @@ export async function enrichBatch(
     try {
       // Validate Haiku data against allowed values (LLM trust boundary)
       const VALID_SENTIMENTS = new Set(['bullish', 'bearish', 'neutral']);
-      const VALID_THEMES = new Set([
-        'semis', 'geopolitics', 'macro', 'ai_infra', 'crypto',
-        'options', 'energy', 'china_asia', 'fixed_income', 'earnings', 'other',
-      ]);
 
       if (
         !haikuData.sentiment ||
@@ -373,6 +357,11 @@ export async function enrichBatch(
           `Invalid Haiku data for tweet ${tweet.id}: missing sentiment or themes`,
         );
       }
+
+      // Sanitize themes: lowercase, snake_case, no empty strings
+      haikuData.themes = haikuData.themes
+        .map(th => th.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, ''))
+        .filter(th => th.length > 0) as any;
 
       // Compute novelty score
       const noveltyScore = computeNoveltyScore(
@@ -411,12 +400,11 @@ export async function enrichBatch(
         });
       }
 
-      // Build themes (filter to valid values only)
-      const validatedThemes = haikuData.themes.filter((th) => VALID_THEMES.has(th));
-      if (validatedThemes.length === 0) {
-        throw new Error(`No valid themes for tweet ${tweet.id}`);
+      // Build themes (accept all sanitized themes — core + custom)
+      if (haikuData.themes.length === 0) {
+        throw new Error(`No themes for tweet ${tweet.id}`);
       }
-      const themes: Theme[] = validatedThemes.map((th) => ({
+      const themes: Theme[] = haikuData.themes.map((th) => ({
         tweet_id: tweet.id,
         theme: th,
       }));
@@ -458,7 +446,7 @@ export async function enrichBatch(
               author_id: tweet.author_id,
               author_handle: tweet.author_handle,
               tweet_id: tweet.id,
-              theme: validatedThemes[0],
+              theme: haikuData.themes[0],
               ticker,
               direction: haikuData.sentiment as 'bullish' | 'bearish',
               confidence,
