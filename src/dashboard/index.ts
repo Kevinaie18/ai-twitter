@@ -5,7 +5,7 @@ import { serve } from '@hono/node-server';
 import { basicAuth } from 'hono/basic-auth';
 import * as db from '../db.js';
 
-export function createDashboard(port: number, env: Record<string, string>) {
+export function createDashboard(port: number, env: Record<string, string>, config?: { defaultListId?: string }) {
   const app = new Hono();
 
   // Basic auth — only enabled when DASHBOARD_PASS is set
@@ -15,11 +15,13 @@ export function createDashboard(port: number, env: Record<string, string>) {
     app.use('/*', basicAuth({ username: user, password: pass }));
   }
 
+  const defaultListId = config?.defaultListId || '';
+
   // ─── API Routes ──────────────────────────────────────────────────────────────
 
   // GET /api/overview — dashboard overview data
   app.get('/api/overview', (c) => {
-    const listId = c.req.query('list_id') || '';
+    const listId = c.req.query('list_id') || defaultListId;
     const days = parseInt(c.req.query('days') || '7');
 
     const consensus = db.getLatestConsensusForAllThemes(listId);
@@ -31,7 +33,7 @@ export function createDashboard(port: number, env: Record<string, string>) {
 
   // GET /api/consensus-history — consensus over time for trend chart
   app.get('/api/consensus-history', (c) => {
-    const listId = c.req.query('list_id') || '';
+    const listId = c.req.query('list_id') || defaultListId;
     const theme = c.req.query('theme') || '';
     const days = parseInt(c.req.query('days') || '30');
     const snapshots = db.getConsensusSnapshots(listId, theme, days);
@@ -40,7 +42,7 @@ export function createDashboard(port: number, env: Record<string, string>) {
 
   // GET /api/themes — all themes with tweet counts
   app.get('/api/themes', (c) => {
-    const listId = c.req.query('list_id') || '';
+    const listId = c.req.query('list_id') || defaultListId;
     const days = parseInt(c.req.query('days') || '7');
     const themes = db.getRecentThemes(listId, days * 24);
     return c.json({ themes });
@@ -49,7 +51,7 @@ export function createDashboard(port: number, env: Record<string, string>) {
   // GET /api/theme/:name — deep dive on a theme
   app.get('/api/theme/:name', (c) => {
     const theme = decodeURIComponent(c.req.param('name'));
-    const listId = c.req.query('list_id') || '';
+    const listId = c.req.query('list_id') || defaultListId;
     const days = parseInt(c.req.query('days') || '7');
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -61,7 +63,7 @@ export function createDashboard(port: number, env: Record<string, string>) {
 
   // GET /api/accounts — all accounts with stats
   app.get('/api/accounts', (c) => {
-    const listId = c.req.query('list_id') || '';
+    const listId = c.req.query('list_id') || defaultListId;
     const accounts = db.getAllAccounts(listId);
     return c.json({ accounts });
   });
