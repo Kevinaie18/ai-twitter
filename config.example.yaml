@@ -9,6 +9,10 @@ digest:
   timezone: "UTC"
   morning_hour: 7
   evening_hour: 18
+  max_themes: 4               # max themes in digest (default 4)
+  delta_enabled: true          # show "what changed" section
+  format: split                # 'single' or 'split' (TL;DR + deep dive)
+  tldr_max_words: 150          # max words for TL;DR message
 
 consensus:
   threshold_pct: 80
@@ -22,3 +26,24 @@ dashboard:
 
 scraper:
   max_pages_per_scrape: 10
+
+# Signal noise floor — drop themes below these thresholds from digest
+signal_floor:
+  min_accounts: 3
+  min_engagement: 50
+
+# Source credibility tags — tag accounts for digest quality weighting
+accounts:
+  default_tag: unverified
+  credibility_tags:
+    # BarakRavid: journalist
+    # citrini: analyst
+    # StockNews690137: aggregator
+
+# Track record engine — log directional calls and compute hit rates
+track_record:
+  enabled: false               # opt-in: set to true to start tracking
+  resolution_days: 5           # days to wait before checking if call was right
+  min_confidence: 0.6          # only track calls with high confidence
+  hit_threshold_pct: 0.5       # price must move this % in predicted direction
+  min_calls_to_display: 5      # show hit rate only after N resolved calls

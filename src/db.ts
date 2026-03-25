@@ -7,6 +7,11 @@ import type {
   ConsensusSnapshot,
   Entity,
   Theme,
+  Config,
+  CredibilityTag,
+  DigestSnapshot,
+  DirectionalCall,
+  AuthorTrackRecord,
 } from './types.js';
 
 // ─── Module-level DB instance ────────────────────────────────────────────────
@@ -180,6 +185,47 @@ function createTables(): void {
       PRIMARY KEY (ticker, date)
     );
 
+    -- ─── Digest snapshots (delta tracking) ─────────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS digest_snapshots (
+      id TEXT PRIMARY KEY,
+      list_id TEXT NOT NULL,
+      generated_at TEXT NOT NULL,
+      digest_type TEXT NOT NULL DEFAULT 'full',
+      tweet_count INTEGER NOT NULL DEFAULT 0,
+      themes_json TEXT NOT NULL DEFAULT '[]',
+      consensus_json TEXT NOT NULL DEFAULT '{}',
+      alerts_json TEXT NOT NULL DEFAULT '[]',
+      emerging_json TEXT NOT NULL DEFAULT '[]',
+      digest_text TEXT NOT NULL DEFAULT ''
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_digest_snapshots_list ON digest_snapshots(list_id, generated_at);
+
+    -- ─── Directional calls (track record engine) ─────────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS directional_calls (
+      id TEXT PRIMARY KEY,
+      author_id TEXT NOT NULL,
+      author_handle TEXT NOT NULL,
+      tweet_id TEXT NOT NULL REFERENCES tweets(id),
+      theme TEXT NOT NULL,
+      ticker TEXT,
+      direction TEXT NOT NULL,
+      confidence REAL NOT NULL DEFAULT 0.5,
+      call_date TEXT NOT NULL,
+      price_at_call REAL,
+      resolution_days INTEGER NOT NULL DEFAULT 5,
+      resolved_at TEXT,
+      price_at_resolve REAL,
+      price_change_pct REAL,
+      hit INTEGER,
+      status TEXT NOT NULL DEFAULT 'open'
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dc_author ON directional_calls(author_id);
+    CREATE INDEX IF NOT EXISTS idx_dc_status ON directional_calls(status, call_date);
+
     -- ─── FTS5 full-text search ─────────────────────────────────────────────────
 
     CREATE VIRTUAL TABLE IF NOT EXISTS tweets_fts USING fts5(
@@ -213,6 +259,13 @@ function createTables(): void {
     `);
   } catch {
     console.warn('Could not create tweet_embeddings vec0 table — sqlite-vec may not be loaded');
+  }
+
+  // Idempotent migration: add credibility_tag column to accounts
+  try {
+    db.exec(`ALTER TABLE accounts ADD COLUMN credibility_tag TEXT NOT NULL DEFAULT 'unverified'`);
+  } catch {
+    // Column already exists — expected after first run
   }
 }
 
@@ -625,6 +678,125 @@ export function insertPriceData(ticker: string, date: string, close: number): vo
     INSERT OR REPLACE INTO prices (ticker, date, close)
     VALUES (?, ?, ?)
   `).run(ticker, date, close);
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+// ─── Credibility Tag Sync ────────────────────────────────────────────────────
+
+export function syncCredibilityTags(config: Config): void {
+  const tags = config.accounts?.credibility_tags ?? {};
+  const defaultTag = config.accounts?.default_tag ?? 'unverified';
+
+  const update = db.prepare(`UPDATE accounts SET credibility_tag = ? WHERE author_handle = ? COLLATE NOCASE`);
+  const tx = db.transaction(() => {
+    // Set default for all accounts
+    db.prepare(`UPDATE accounts SET credibility_tag = ?`).run(defaultTag);
+    // Override with config-specified tags
+    for (const [handle, tag] of Object.entries(tags)) {
+      update.run(tag, handle);
+    }
+  });
+  tx();
+}
+
+export function getAccountCredibilityTag(authorHandle: string): CredibilityTag {
+  const row = db.prepare(`SELECT credibility_tag FROM accounts WHERE author_handle = ? COLLATE NOCASE`).get(authorHandle) as { credibility_tag: string } | undefined;
+  return (row?.credibility_tag as CredibilityTag) ?? 'unverified';
+}
+
+// ─── Digest Snapshot Operations ─────────────────────────────────────────────
+
+export function insertDigestSnapshot(snapshot: Omit<DigestSnapshot, 'id'>): void {
+  const id = `ds_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  db.prepare(`
+    INSERT INTO digest_snapshots (id, list_id, generated_at, digest_type, tweet_count, themes_json, consensus_json, alerts_json, emerging_json, digest_text)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(id, snapshot.list_id, snapshot.generated_at, snapshot.digest_type, snapshot.tweet_count, snapshot.themes_json, snapshot.consensus_json, snapshot.alerts_json, snapshot.emerging_json, snapshot.digest_text);
+
+  // Cleanup: keep only last 30 days
+  db.prepare(`DELETE FROM digest_snapshots WHERE generated_at < datetime('now', '-30 days')`).run();
+}
+
+export function getLastDigestSnapshot(listId: string): DigestSnapshot | null {
+  const row = db.prepare(`
+    SELECT * FROM digest_snapshots WHERE list_id = ? ORDER BY generated_at DESC LIMIT 1
+  `).get(listId) as DigestSnapshot | undefined;
+  return row ?? null;
+}
+
+// ─── Directional Call Operations ────────────────────────────────────────────
+
+export function insertDirectionalCall(call: Omit<DirectionalCall, 'id' | 'resolved_at' | 'price_at_resolve' | 'price_change_pct' | 'hit'>): void {
+  const id = `dc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  db.prepare(`
+    INSERT OR IGNORE INTO directional_calls (id, author_id, author_handle, tweet_id, theme, ticker, direction, confidence, call_date, price_at_call, resolution_days, status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')
+  `).run(id, call.author_id, call.author_handle, call.tweet_id, call.theme, call.ticker, call.direction, call.confidence, call.call_date, call.price_at_call, call.resolution_days);
+}
+
+export function getOpenCallsToResolve(resolutionDays: number): DirectionalCall[] {
+  return db.prepare(`
+    SELECT * FROM directional_calls
+    WHERE status = 'open'
+      AND call_date <= datetime('now', '-' || ? || ' days')
+    ORDER BY call_date ASC
+  `).all(resolutionDays) as DirectionalCall[];
+}
+
+export function resolveCall(id: string, resolvedAt: string, priceAtResolve: number | null, priceChangePct: number | null, hit: boolean | null, status: string): void {
+  db.prepare(`
+    UPDATE directional_calls SET resolved_at = ?, price_at_resolve = ?, price_change_pct = ?, hit = ?, status = ?
+    WHERE id = ?
+  `).run(resolvedAt, priceAtResolve, priceChangePct, hit === null ? null : hit ? 1 : 0, status, id);
+}
+
+export function getAuthorTrackRecord(authorId: string): AuthorTrackRecord | null {
+  const account = db.prepare(`SELECT author_id, author_handle FROM accounts WHERE author_id = ?`).get(authorId) as { author_id: string; author_handle: string } | undefined;
+  if (!account) return null;
+
+  const stats = db.prepare(`
+    SELECT
+      COUNT(*) AS total_calls,
+      SUM(CASE WHEN status = 'resolved' THEN 1 ELSE 0 END) AS resolved_calls,
+      SUM(CASE WHEN hit = 1 THEN 1 ELSE 0 END) AS hits,
+      SUM(CASE WHEN status = 'resolved' AND hit = 0 THEN 1 ELSE 0 END) AS misses
+    FROM directional_calls
+    WHERE author_id = ?
+  `).get(authorId) as { total_calls: number; resolved_calls: number; hits: number; misses: number };
+
+  const resolvedCalls = stats.resolved_calls ?? 0;
+  return {
+    author_id: account.author_id,
+    author_handle: account.author_handle,
+    total_calls: stats.total_calls ?? 0,
+    resolved_calls: resolvedCalls,
+    hits: stats.hits ?? 0,
+    misses: stats.misses ?? 0,
+    hit_rate: resolvedCalls > 0 ? (stats.hits ?? 0) / resolvedCalls : 0,
+  };
+}
+
+export function getTopTrackRecords(listId: string, minCalls: number): AuthorTrackRecord[] {
+  const rows = db.prepare(`
+    SELECT dc.author_id, a.author_handle,
+      COUNT(*) AS total_calls,
+      SUM(CASE WHEN dc.status = 'resolved' THEN 1 ELSE 0 END) AS resolved_calls,
+      SUM(CASE WHEN dc.hit = 1 THEN 1 ELSE 0 END) AS hits,
+      SUM(CASE WHEN dc.status = 'resolved' AND dc.hit = 0 THEN 1 ELSE 0 END) AS misses
+    FROM directional_calls dc
+    JOIN accounts a ON dc.author_id = a.author_id
+    JOIN tweets t ON dc.tweet_id = t.id
+    WHERE t.list_id = ?
+    GROUP BY dc.author_id
+    HAVING SUM(CASE WHEN dc.status = 'resolved' THEN 1 ELSE 0 END) >= ?
+    ORDER BY CAST(SUM(CASE WHEN dc.hit = 1 THEN 1 ELSE 0 END) AS REAL) / SUM(CASE WHEN dc.status = 'resolved' THEN 1 ELSE 0 END) DESC
+  `).all(listId, minCalls) as Array<{ author_id: string; author_handle: string; total_calls: number; resolved_calls: number; hits: number; misses: number }>;
+
+  return rows.map(r => ({
+    ...r,
+    hit_rate: r.resolved_calls > 0 ? r.hits / r.resolved_calls : 0,
+  }));
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

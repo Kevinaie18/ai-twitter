@@ -10,6 +10,7 @@ import {
   getAccountStats,
   getScrapeHealth,
   getUnenrichedTweets,
+  getAuthorTrackRecord,
 } from './db.js';
 import type { ConsensusSnapshot } from './types.js';
 import { getDailyCost } from './enrichment.js';
@@ -81,15 +82,20 @@ function splitMessage(text: string): string[] {
 /**
  * Send a potentially long message, splitting across multiple messages if needed.
  */
-async function sendLongMessage(bot: Bot, chatId: string, text: string, parseMode?: 'MarkdownV2' | 'HTML'): Promise<void> {
+async function sendLongMessage(bot: Bot, chatId: string, text: string, parseMode?: 'MarkdownV2' | 'HTML', replyToMessageId?: number): Promise<void> {
   const chunks = splitMessage(text);
-  for (const chunk of chunks) {
+  for (let i = 0; i < chunks.length; i++) {
+    const opts: Record<string, any> = {};
+    if (parseMode) opts.parse_mode = parseMode;
+    // Only reply to the message for the first chunk
+    if (i === 0 && replyToMessageId) opts.reply_to_message_id = replyToMessageId;
     try {
-      await bot.api.sendMessage(chatId, chunk, parseMode ? { parse_mode: parseMode } : undefined);
+      await bot.api.sendMessage(chatId, chunks[i], Object.keys(opts).length > 0 ? opts : undefined);
     } catch (err) {
-      // If markdown parse fails, retry without formatting
       if (parseMode) {
-        await bot.api.sendMessage(chatId, chunk);
+        const fallbackOpts: Record<string, any> = {};
+        if (i === 0 && replyToMessageId) fallbackOpts.reply_to_message_id = replyToMessageId;
+        await bot.api.sendMessage(chatId, chunks[i], Object.keys(fallbackOpts).length > 0 ? fallbackOpts : undefined);
       } else {
         throw err;
       }
@@ -100,10 +106,21 @@ async function sendLongMessage(bot: Bot, chatId: string, text: string, parseMode
 // ─── Push Functions ──────────────────────────────────────────────────────────
 
 /**
- * Send a formatted digest message to a chat. Splits if >4096 chars.
+ * Send a formatted digest message to a chat. Supports split format (TL;DR + deep dive as reply).
  */
-export async function sendDigest(bot: Bot, chatId: string, digestText: string): Promise<void> {
-  await sendLongMessage(bot, chatId, digestText);
+export async function sendDigest(bot: Bot, chatId: string, digest: string | import('./types.js').DigestResult): Promise<void> {
+  if (typeof digest === 'string') {
+    await sendLongMessage(bot, chatId, digest);
+    return;
+  }
+
+  if (digest.tldr) {
+    // Send TL;DR first, then full digest as threaded reply
+    const tldrMsg = await bot.api.sendMessage(chatId, digest.tldr);
+    await sendLongMessage(bot, chatId, digest.text, undefined, tldrMsg.message_id);
+  } else {
+    await sendLongMessage(bot, chatId, digest.text);
+  }
 }
 
 /**
@@ -436,7 +453,10 @@ export function createBot(token: string, env: Record<string, string>): Bot {
       }
 
       const lines: string[] = [];
-      lines.push(`ACCOUNT: @${stats.author_handle} (${stats.author_name})`);
+      const credTag = account.credibility_tag && account.credibility_tag !== 'unverified'
+        ? ` [${account.credibility_tag}]`
+        : '';
+      lines.push(`ACCOUNT: @${stats.author_handle} (${stats.author_name})${credTag}`);
       lines.push(`Followers: ${stats.follower_count.toLocaleString()}`);
       lines.push(`Total tweets tracked: ${stats.tweet_count}`);
       lines.push(`First seen: ${stats.first_seen_at?.slice(0, 10) ?? 'N/A'}`);
@@ -460,6 +480,16 @@ export function createBot(token: string, env: Record<string, string>): Bot {
           const pct = total > 0 ? ((sl.count / total) * 100).toFixed(0) : '0';
           lines.push(`  ${sl.sentiment}: ${sl.count} (${pct}%)`);
         }
+        lines.push('');
+      }
+
+      // Track record
+      const trackRecord = getAuthorTrackRecord(account.author_id);
+      if (trackRecord && trackRecord.resolved_calls > 0) {
+        lines.push('Track Record:');
+        lines.push(`  Total calls: ${trackRecord.total_calls}`);
+        lines.push(`  Resolved: ${trackRecord.resolved_calls} (${(trackRecord.hit_rate * 100).toFixed(0)}% hit rate)`);
+        lines.push(`  Hits: ${trackRecord.hits} | Misses: ${trackRecord.misses}`);
         lines.push('');
       }
 

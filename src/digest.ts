@@ -3,13 +3,18 @@ import {
   getDb,
   getDigestTweets,
   getTweetsByTheme,
+  getLastDigestSnapshot,
+  insertDigestSnapshot,
+  getTopTrackRecords,
+  getAccountCredibilityTag,
 } from './db.js';
-import type { DigestResult, ConsensusSnapshot } from './types.js';
+import type { DigestResult, ConsensusSnapshot, Config, DigestDelta } from './types.js';
 import {
   generateAllSnapshots,
   detectConsensusAlerts,
   detectEmergingNarratives,
   getPriceAfterConsensus,
+  computeDigestDelta,
   type ConsensusAlert,
   type EmergingNarrative,
   type PriceResult,
@@ -45,6 +50,8 @@ export async function generateDigest(
   listName: string,
   since: string,
   apiKey: string,
+  config: Config,
+  digestType: 'morning' | 'evening' | 'manual' = 'manual',
 ): Promise<DigestResult> {
   const now = new Date().toISOString();
 
@@ -72,7 +79,6 @@ export async function generateDigest(
   const alerts = detectConsensusAlerts(listId, 70);
 
   // Step 4: Detect emerging narratives
-  // Compute data age: days between earliest tweet and now
   const earliestTweet = tweets[tweets.length - 1];
   const dataAgeDays = earliestTweet
     ? Math.floor(
@@ -83,7 +89,14 @@ export async function generateDigest(
   const emerging = detectEmergingNarratives(listId, dataAgeDays);
 
   // Step 5: Cluster tweets by theme
-  const themeClusters = clusterByTheme(listId, since, tweets, snapshotByTheme);
+  let themeClusters = clusterByTheme(listId, since, tweets, snapshotByTheme);
+
+  // Step 5.5: Apply signal noise floor
+  const minAccounts = config.signal_floor?.min_accounts ?? 3;
+  const minEngagement = config.signal_floor?.min_engagement ?? 50;
+  themeClusters = themeClusters.filter(c =>
+    c.uniqueAccounts >= minAccounts && c.totalEngagement >= minEngagement
+  );
 
   // Step 6: Rank themes — unique accounts > total engagement > novelty
   themeClusters.sort((a, b) => {
@@ -94,7 +107,23 @@ export async function generateDigest(
     return b.avgNovelty - a.avgNovelty;
   });
 
-  const themesCovered = themeClusters.map((c) => c.theme);
+  const maxThemes = config.digest?.max_themes ?? 4;
+  const themesCovered = themeClusters.slice(0, maxThemes).map((c) => c.theme);
+
+  // Step 6.5: Compute delta from previous digest
+  let delta: DigestDelta | undefined;
+  if (config.digest?.delta_enabled !== false) {
+    const previousSnapshot = getLastDigestSnapshot(listId);
+    delta = computeDigestDelta(themesCovered, snapshotByTheme, previousSnapshot);
+    // Only include delta if there's actual content
+    if (delta.new_themes.length === 0 && delta.dropped_themes.length === 0 && delta.consensus_shifts.length === 0) {
+      delta = undefined;
+    }
+  }
+
+  // Step 6.6: Get track records for accounts in digest
+  const minCallsToDisplay = config.track_record?.min_calls_to_display ?? 5;
+  const trackRecords = config.track_record?.enabled ? getTopTrackRecords(listId, minCallsToDisplay) : [];
 
   // Step 7: Try Opus, fall back to raw stats
   try {
@@ -103,17 +132,49 @@ export async function generateDigest(
       listName,
       tweets.length,
       since,
-      themeClusters,
+      themeClusters.slice(0, maxThemes),
       alerts,
       emerging,
+      delta,
+      trackRecords,
     );
+
+    // Step 7.5: Generate TL;DR if split format
+    let tldr: string | undefined;
+    if (config.digest?.format === 'split') {
+      try {
+        tldr = await generateTldr(apiKey, digestText, config.digest?.tldr_max_words ?? 150);
+      } catch (err) {
+        console.warn('[digest] TL;DR generation failed, will send full digest:', err);
+      }
+    }
+
+    // Step 8: Persist digest snapshot for delta tracking
+    const consensusState: Record<string, { direction: string; pct: number }> = {};
+    for (const [theme, snap] of snapshotByTheme) {
+      consensusState[theme] = { direction: snap.consensus_direction, pct: snap.consensus_pct };
+    }
+
+    insertDigestSnapshot({
+      list_id: listId,
+      generated_at: now,
+      digest_type: digestType,
+      tweet_count: tweets.length,
+      themes_json: JSON.stringify(themesCovered),
+      consensus_json: JSON.stringify(consensusState),
+      alerts_json: JSON.stringify(alerts),
+      emerging_json: JSON.stringify(emerging),
+      digest_text: digestText,
+    });
 
     return {
       list_id: listId,
       text: digestText,
+      tldr,
       themes_covered: themesCovered,
       tweet_count: tweets.length,
       generated_at: now,
+      delta,
     };
   } catch (err) {
     console.error('[digest] Opus call failed, falling back to raw stats:', err);
@@ -355,6 +416,8 @@ async function callOpus(
   clusters: ThemeCluster[],
   alerts: ConsensusAlert[],
   emerging: EmergingNarrative[],
+  delta?: DigestDelta,
+  trackRecords?: import('./types.js').AuthorTrackRecord[],
 ): Promise<string> {
   const client = new OpenRouter({ apiKey });
 
@@ -366,6 +429,30 @@ async function callOpus(
   sections.push(`Time window: since ${since}`);
   sections.push(`Total tweets analyzed: ${tweetCount}`);
   sections.push('');
+
+  // Delta section (what changed since last digest)
+  if (delta && (delta.new_themes.length > 0 || delta.dropped_themes.length > 0 || delta.consensus_shifts.length > 0)) {
+    sections.push('=== WHAT CHANGED SINCE LAST DIGEST ===');
+    if (delta.new_themes.length > 0) {
+      sections.push(`New themes: ${delta.new_themes.join(', ')}`);
+    }
+    if (delta.dropped_themes.length > 0) {
+      sections.push(`Dropped themes: ${delta.dropped_themes.join(', ')}`);
+    }
+    for (const shift of delta.consensus_shifts) {
+      sections.push(`Consensus shift: ${shift.theme} — ${shift.old_direction} ${shift.old_pct.toFixed(0)}% → ${shift.new_direction} ${shift.new_pct.toFixed(0)}%`);
+    }
+    sections.push('');
+  }
+
+  // Track records
+  if (trackRecords && trackRecords.length > 0) {
+    sections.push('=== AUTHOR TRACK RECORDS ===');
+    for (const tr of trackRecords) {
+      sections.push(`@${tr.author_handle}: ${(tr.hit_rate * 100).toFixed(0)}% hit rate (${tr.hits}/${tr.resolved_calls} calls resolved)`);
+    }
+    sections.push('');
+  }
 
   // Consensus alerts
   if (alerts.length > 0) {
@@ -420,8 +507,10 @@ async function callOpus(
       const eng =
         tw.engagement_likes + tw.engagement_retweets + tw.engagement_replies;
       const sentiment = tw.sentiment ? ` [${tw.sentiment}]` : '';
+      const credTag = getAccountCredibilityTag(tw.author_handle);
+      const credLabel = credTag !== 'unverified' ? ` [${credTag}]` : '';
       sections.push(
-        `  @${tw.author_handle}${sentiment} (${eng} eng): ${tw.text.slice(0, 280)}`,
+        `  @${tw.author_handle}${credLabel}${sentiment} (${eng} eng): ${tw.text.slice(0, 280)}`,
       );
     }
   }
@@ -475,21 +564,23 @@ Your output format MUST be:
 
 📊 DIGEST: [List Name] | [tweet count] tweets | [time window]
 
+🔄 WHAT CHANGED (only if delta data provided — this section goes FIRST)
+- Lead with what shifted since the last digest: consensus flips, new themes, dropped themes
+- This is the most valuable section — experienced readers scan this first
+
 🔴 CONSENSUS ALERT (only if alerts exist)
 - One bullet per alert with the theme, direction, percentage, and historical context if available.
 
-📌 TOP THEMES (ranked)
-For each theme (up to 6):
+📌 TOP THEMES (ranked, max 4)
+For each theme:
 - Theme name with brief 1-2 sentence synthesis of the conversation
-- Key accounts and their positions
+- Key accounts and their positions. Include [credibility tag] when provided (journalist, analyst, etc.)
+- When author track records are available, include hit rate: "@handle (72% hit rate)"
 - Consensus reading if available
-- Any price backtesting data
+- Flag claims from [aggregator] or [unverified] sources explicitly
 
-🧵 NOTABLE THREADS (only if threads exist)
-- Brief description of significant threads
-
-💡 EMERGING (only if emerging narratives exist)
-- New topics gaining traction
+💡 EMERGING (only if emerging narratives exist — promote this section)
+- New topics gaining traction. This is often the most actionable signal.
 
 Rules:
 - Be concise. No filler. Financial-professional tone.
@@ -497,7 +588,8 @@ Rules:
 - Synthesize, don't just list tweets.
 - If consensus is strong (>75%), highlight it prominently.
 - Include price data only when available and relevant.
-- Maximum 800 words total.`;
+- Prioritize [journalist] and [institutional] sources over [aggregator] and [unverified].
+- Maximum 600 words total.`;
 
   const response = await client.chat.send({
     model: 'anthropic/claude-opus-4.6',
@@ -518,4 +610,33 @@ Rules:
 
   const textContent = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent);
   return textContent.trim();
+}
+
+// ─── TL;DR Generation ───────────────────────────────────────────────────────
+
+async function generateTldr(
+  apiKey: string,
+  fullDigest: string,
+  maxWords: number,
+): Promise<string> {
+  const client = new OpenRouter({ apiKey });
+
+  const response = await client.chat.send({
+    model: 'anthropic/claude-haiku-4.5',
+    maxTokens: 512,
+    messages: [
+      {
+        role: 'system' as const,
+        content: `Compress this financial digest into a TL;DR of at most ${maxWords} words. Keep the most actionable signals. Use bullet points. Include consensus alerts and any "what changed" items prominently. No headers or emoji.`,
+      },
+      {
+        role: 'user' as const,
+        content: fullDigest,
+      },
+    ],
+  });
+
+  const rawContent = response.choices?.[0]?.message?.content;
+  if (!rawContent) throw new Error('Haiku returned no content for TL;DR');
+  return (typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent)).trim();
 }
