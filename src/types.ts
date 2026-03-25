@@ -144,6 +144,16 @@ export interface DigestResult {
   delta?: DigestDelta;
 }
 
+// ─── Theme Registry ─────────────────────────────────────────────────────────
+
+export interface ThemeRegistryEntry {
+  theme: string;              // canonical snake_case name
+  description: string;        // 1-sentence definition
+  is_core: boolean;           // true = hardcoded core theme, false = LLM-discovered
+  created_at: string;
+  tweet_count: number;        // running count for frequency tracking
+}
+
 // ─── Digest Snapshots (for delta tracking) ─────────────────────────────────
 
 export interface DigestSnapshot {

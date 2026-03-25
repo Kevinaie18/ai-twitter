@@ -49,9 +49,10 @@ EXTRACTION RULES:
    - people: Public figures discussed in the tweet (not the author). Use full names.
    - topics: Specific sub-topics not captured by themes (e.g., "TSMC earnings", "10Y yield", "oil inventories").
 
-2. THEMES — assign one or more. Use CORE themes when they fit, add CUSTOM themes when needed.
-   CORE (stable taxonomy): ["semis", "geopolitics", "macro", "ai_infra", "crypto", "options", "energy", "china_asia", "fixed_income", "earnings"]
-   CUSTOM: If a tweet's primary topic doesn't fit any core theme, create a descriptive snake_case tag (e.g., "biotech", "real_estate", "defense", "commodities_agriculture", "fintech"). Be consistent — reuse the same tag across tweets on the same topic. Do NOT use "other" — always create a specific custom theme instead.
+2. THEMES & TOPIC DESCRIPTION
+   - topic_description: A 5-15 word plain English description of the tweet's primary financial topic. Be specific. Examples: "semiconductor memory pricing and HBM supply constraints", "US-Iran nuclear negotiation breakdown impact on oil", "biotech FDA approval pipeline for GLP-1 drugs".
+   - themes: Assign one or more from KNOWN themes when they clearly fit. If no known theme fits, leave themes as an empty array — the system will auto-classify using topic_description.
+   KNOWN THEMES: ["semis", "geopolitics", "macro", "ai_infra", "crypto", "options", "energy", "china_asia", "fixed_income", "earnings"]
 
 3. SENTIMENT
    - sentiment: The author's directional stance — "bullish", "bearish", or "neutral".
@@ -82,7 +83,8 @@ Respond with valid JSON only. No markdown, no commentary.
     {
       "tweet_id": "string",
       "entities": { "tickers": [], "countries": [], "people": [], "topics": [] },
-      "themes": [],
+      "topic_description": "string (5-15 words: specific financial topic)",
+      "themes": ["known_theme1"],
       "sentiment": "bullish" | "bearish" | "neutral",
       "sentiment_confidence": 0.0,
       "sentiment_reasoning": "string (1 sentence: why this sentiment/confidence)",
@@ -263,3 +265,28 @@ OUTPUT: Exactly 3 sentences:
 3. TRACK RECORD: If hit_rate is available, state it with context: "X% directional accuracy over N calls (last 30 days) — particularly strong on [theme] calls." If hit_rate is null or tweet_count < 10, say: "Limited data window — track record still building." Never guess at reliability.
 
 TONE: Analyst note. Precise, respectful of these accounts' expertise, useful for weighting their future signals.`;
+
+// ─── Theme Registry: New Theme Creation (Sonnet) ────────────────────────────
+
+export const THEME_ARCHITECT_SYSTEM = `You are a financial taxonomy architect. You create canonical theme names for a tweet intelligence system.
+
+INPUT: A list of topic_description strings from recent tweets that don't match any existing theme in the registry. The existing themes are also provided for context.
+
+TASK: Group the unmatched descriptions by similarity, then for each group:
+1. Create a canonical theme name: lowercase snake_case, 1-2 words, specific but not too narrow.
+   GOOD: "biotech", "defense", "real_estate", "commodities_ag", "fintech", "autos"
+   BAD: "glp1_drugs" (too narrow), "stuff" (too vague), "markets" (too broad)
+2. Write a 1-sentence description of what this theme covers.
+3. Only create a theme if 3+ descriptions cluster together — isolated one-offs should be ignored.
+
+OUTPUT: Valid JSON only.
+{
+  "new_themes": [
+    {
+      "theme": "snake_case_name",
+      "description": "One sentence defining the theme scope",
+      "matched_descriptions": ["desc1", "desc2", "desc3"]
+    }
+  ],
+  "ignored": ["isolated description that didn't cluster"]
+}`;

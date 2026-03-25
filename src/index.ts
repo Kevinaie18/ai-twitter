@@ -1,9 +1,9 @@
 import { schedule } from 'node-cron';
 import { Bot } from 'grammy';
 import { loadConfig, loadEnv, getRequiredEnv } from './config.js';
-import { initDb, getUnenrichedTweets, getLastScrapedTweetId, getScrapeHealth, syncCredibilityTags, syncListConfigs } from './db.js';
+import { initDb, getUnenrichedTweets, getLastScrapedTweetId, getScrapeHealth, syncCredibilityTags, syncListConfigs, seedThemeRegistry } from './db.js';
 import { discoverQueryHash, scrapeList } from './scraper.js';
-import { enrichBatch } from './enrichment.js';
+import { enrichBatch, discoverNewThemes } from './enrichment.js';
 import { generateDigest } from './digest.js';
 import { createBot, sendDigest, sendAlert } from './bot.js';
 import { createDashboard } from './dashboard/index.js';
@@ -29,6 +29,7 @@ async function main() {
   initDb('data/intel.db');
   syncListConfigs(config);
   syncCredibilityTags(config);
+  seedThemeRegistry();
   if (config.theme_tickers) setThemeTickerOverrides(config.theme_tickers);
   console.log('[init] Database ready');
 
@@ -76,6 +77,22 @@ async function main() {
     }
   });
   console.log('[init] Enrichment scheduled every 5min');
+
+  // ─── Theme discovery cron (every 6 hours) ─────────
+  schedule('0 */6 * * *', async () => {
+    try {
+      const freshEnv = loadEnv();
+      const result = await discoverNewThemes(
+        getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY'),
+      );
+      if (result.created > 0) {
+        console.log(`[themes] Discovered ${result.created} new themes, ignored ${result.ignored} orphans`);
+      }
+    } catch (err) {
+      console.error('[themes] Discovery error:', err);
+    }
+  });
+  console.log('[init] Theme discovery scheduled every 6h');
 
   // ─── Digest cron (morning + evening) ─────────
   const morningHour = config.digest?.morning_hour ?? 7;

@@ -9,6 +9,9 @@ import {
   insertEmbedding,
   insertDirectionalCall,
   getPriceData,
+  getAllThemeDescriptions,
+  incrementThemeCount,
+  insertUnmatchedTopic,
 } from './db.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -21,6 +24,7 @@ interface HaikuTweetResult {
     people: string[];
     topics: string[];
   };
+  topic_description?: string;
   themes: string[];
   sentiment: 'bullish' | 'bearish' | 'neutral';
   sentiment_confidence: number;
@@ -249,6 +253,64 @@ function computeNoveltyScore(
   return 1 - maxSimilarity;
 }
 
+// ─── Theme matching via embedding similarity ───────────────────────────────
+
+// Cache: theme descriptions → embeddings (built lazily)
+let themeEmbeddingCache: Map<string, number[]> | null = null;
+
+function matchTopicToTheme(
+  tweetEmbedding: number[],
+  topicDescription: string,
+): string | null {
+  const db = getDb();
+
+  // Build or refresh cache from theme registry
+  if (!themeEmbeddingCache) {
+    themeEmbeddingCache = new Map();
+    const themes = getAllThemeDescriptions();
+    for (const t of themes) {
+      // Use the most recent tweet embedding for each theme as a proxy
+      const row = db.prepare(`
+        SELECT te.embedding FROM tweet_embeddings te
+        JOIN tweet_themes tt ON te.tweet_id = tt.tweet_id
+        WHERE tt.theme = ?
+        ORDER BY te.rowid DESC LIMIT 1
+      `).get(t.theme) as { embedding: Buffer } | undefined;
+
+      if (row) {
+        const emb = Array.from(new Float32Array(
+          row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4,
+        ));
+        themeEmbeddingCache.set(t.theme, emb);
+      }
+    }
+  }
+
+  // Find best matching theme by cosine similarity
+  let bestTheme: string | null = null;
+  let bestSimilarity = 0;
+  const MATCH_THRESHOLD = 0.82;
+
+  for (const [theme, themeEmb] of themeEmbeddingCache) {
+    const sim = cosineSimilarity(tweetEmbedding, themeEmb);
+    if (sim > bestSimilarity) {
+      bestSimilarity = sim;
+      bestTheme = theme;
+    }
+  }
+
+  if (bestSimilarity >= MATCH_THRESHOLD && bestTheme) {
+    return bestTheme;
+  }
+
+  return null;
+}
+
+// Invalidate cache when new themes are created
+export function invalidateThemeEmbeddingCache(): void {
+  themeEmbeddingCache = null;
+}
+
 // ─── Main enrichment pipeline ───────────────────────────────────────────────
 
 export async function enrichBatch(
@@ -358,10 +420,31 @@ export async function enrichBatch(
         );
       }
 
-      // Sanitize themes: lowercase, snake_case, no empty strings
+      // ── Theme Resolution: Haiku themes + embedding-based matching ──
+      // Sanitize any themes Haiku provided
       haikuData.themes = haikuData.themes
         .map(th => th.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, ''))
-        .filter(th => th.length > 0) as any;
+        .filter(th => th.length > 0);
+
+      // If Haiku returned no themes but gave a topic_description, try to match
+      // it against the theme registry using embedding similarity
+      if (haikuData.themes.length === 0 && haikuData.topic_description) {
+        const matched = matchTopicToTheme(embedding, haikuData.topic_description);
+        if (matched) {
+          haikuData.themes = [matched];
+        } else {
+          // No match — store for Sonnet to name later, use "unclassified" for now
+          insertUnmatchedTopic(haikuData.topic_description, tweet.id);
+          haikuData.themes = ['unclassified'];
+        }
+      } else if (haikuData.themes.length === 0) {
+        haikuData.themes = ['unclassified'];
+      }
+
+      // Increment theme counts in registry
+      for (const th of haikuData.themes) {
+        incrementThemeCount(th);
+      }
 
       // Compute novelty score
       const noveltyScore = computeNoveltyScore(
@@ -475,4 +558,78 @@ export async function enrichBatch(
   );
 
   return { processed, failed };
+}
+
+// ─── Theme Discovery: Sonnet creates new themes from unmatched topics ───────
+
+import { THEME_ARCHITECT_SYSTEM } from './prompts.js';
+import {
+  getRecentUnmatchedTopics,
+  deleteUnmatchedTopics,
+  insertThemeRegistryEntry,
+} from './db.js';
+
+/**
+ * Process unmatched topic descriptions: cluster them and ask Sonnet to name
+ * new themes. Called periodically (e.g., every 6 hours).
+ * Only creates a theme when 3+ descriptions cluster together.
+ */
+export async function discoverNewThemes(apiKey: string): Promise<{ created: number; ignored: number }> {
+  const unmatched = getRecentUnmatchedTopics(24); // last 24h of unmatched
+  if (unmatched.length < 3) {
+    return { created: 0, ignored: 0 };
+  }
+
+  const existingThemes = getAllThemeDescriptions();
+  const client = new OpenRouter({ apiKey });
+
+  const userPrompt = `EXISTING THEMES:\n${existingThemes.map(t => `- ${t.theme}: ${t.description}`).join('\n')}\n\nUNMATCHED TOPIC DESCRIPTIONS (${unmatched.length} tweets):\n${unmatched.map(u => `- "${u.topic_description}"`).join('\n')}`;
+
+  try {
+    const response = await client.chat.send({
+      model: 'anthropic/claude-sonnet-4.6',
+      maxTokens: 1024,
+      messages: [
+        { role: 'system' as const, content: THEME_ARCHITECT_SYSTEM },
+        { role: 'user' as const, content: userPrompt },
+      ],
+    });
+
+    const textContent = response.choices?.[0]?.message?.content;
+    if (!textContent || typeof textContent !== 'string') {
+      console.warn('[themes] Sonnet returned no content');
+      return { created: 0, ignored: 0 };
+    }
+
+    // Parse JSON (handle markdown fences)
+    let jsonStr = textContent.trim();
+    const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenceMatch) jsonStr = fenceMatch[1].trim();
+
+    const parsed = JSON.parse(jsonStr) as {
+      new_themes: Array<{ theme: string; description: string; matched_descriptions: string[] }>;
+      ignored: string[];
+    };
+
+    let created = 0;
+    for (const nt of parsed.new_themes) {
+      const themeName = nt.theme.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+      if (themeName.length > 0) {
+        insertThemeRegistryEntry(themeName, nt.description, false);
+        created++;
+        console.log(`[themes] New theme discovered: "${themeName}" — ${nt.description}`);
+      }
+    }
+
+    // Clean up processed unmatched topics
+    deleteUnmatchedTopics(unmatched.map(u => u.id));
+
+    // Invalidate embedding cache so new themes are used in matching
+    invalidateThemeEmbeddingCache();
+
+    return { created, ignored: parsed.ignored?.length ?? 0 };
+  } catch (err) {
+    console.error('[themes] Sonnet theme discovery failed:', err);
+    return { created: 0, ignored: 0 };
+  }
 }
