@@ -1,6 +1,6 @@
 import { OpenRouter } from '@openrouter/sdk';
 import type { Tweet, Entity, Theme, Config } from './types.js';
-import { ENRICHMENT_SYSTEM } from './prompts.js';
+import { ENRICHMENT_SYSTEM, THEME_ARCHITECT_SYSTEM } from './prompts.js';
 import {
   getDb,
   getUnenrichedTweets,
@@ -12,6 +12,9 @@ import {
   getAllThemeDescriptions,
   incrementThemeCount,
   insertUnmatchedTopic,
+  getRecentUnmatchedTopics,
+  deleteUnmatchedTopics,
+  insertThemeRegistryEntry,
 } from './db.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -260,7 +263,6 @@ let themeEmbeddingCache: Map<string, number[]> | null = null;
 
 function matchTopicToTheme(
   tweetEmbedding: number[],
-  topicDescription: string,
 ): string | null {
   const db = getDb();
 
@@ -429,7 +431,7 @@ export async function enrichBatch(
       // If Haiku returned no themes but gave a topic_description, try to match
       // it against the theme registry using embedding similarity
       if (haikuData.themes.length === 0 && haikuData.topic_description) {
-        const matched = matchTopicToTheme(embedding, haikuData.topic_description);
+        const matched = matchTopicToTheme(embedding);
         if (matched) {
           haikuData.themes = [matched];
         } else {
@@ -562,13 +564,6 @@ export async function enrichBatch(
 
 // ─── Theme Discovery: Sonnet creates new themes from unmatched topics ───────
 
-import { THEME_ARCHITECT_SYSTEM } from './prompts.js';
-import {
-  getRecentUnmatchedTopics,
-  deleteUnmatchedTopics,
-  insertThemeRegistryEntry,
-} from './db.js';
-
 /**
  * Process unmatched topic descriptions: cluster them and ask Sonnet to name
  * new themes. Called periodically (e.g., every 6 hours).
@@ -581,6 +576,15 @@ export async function discoverNewThemes(apiKey: string): Promise<{ created: numb
   }
 
   const existingThemes = getAllThemeDescriptions();
+
+  // Safety cap: don't let the theme registry grow unbounded
+  const MAX_THEMES = 100;
+  if (existingThemes.length >= MAX_THEMES) {
+    console.warn(`[themes] Theme registry at ${existingThemes.length} themes (cap: ${MAX_THEMES}). Skipping discovery.`);
+    deleteUnmatchedTopics(unmatched.map(u => u.id));
+    return { created: 0, ignored: unmatched.length };
+  }
+
   const client = new OpenRouter({ apiKey });
 
   const userPrompt = `EXISTING THEMES:\n${existingThemes.map(t => `- ${t.theme}: ${t.description}`).join('\n')}\n\nUNMATCHED TOPIC DESCRIPTIONS (${unmatched.length} tweets):\n${unmatched.map(u => `- "${u.topic_description}"`).join('\n')}`;
