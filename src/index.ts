@@ -40,12 +40,13 @@ async function main() {
 
   // Start dashboard
   const dashboardPort = config.dashboard?.port || 3000;
-  createDashboard(dashboardPort, env);
+  const defaultListId = config.lists.find(l => l.active)?.id || '';
+  createDashboard(dashboardPort, env, { defaultListId });
   console.log(`[init] Dashboard at http://localhost:${dashboardPort}`);
 
-  // ─── Scrape cron (every 30 min by default) ─────────
+  // ─── Scrape cron (every 2h by default) ─────────
   for (const list of config.lists.filter(l => l.active)) {
-    const interval = list.scrape_interval_min || 30;
+    const interval = list.scrape_interval_min || 120;
     // Run immediately on startup, then on schedule
     runScrape(list.id, list.name, env, config, chatId, bot);
 

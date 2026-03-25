@@ -10,7 +10,7 @@ You curate the list. The tool does the rest.
 Your curated X list (~100 accounts)
         |
         v
-  Scrape every 30 min (GraphQL + session cookies)
+  Scrape every 2h (GraphQL + session cookies)
         |
         v
   Enrich: entities, sentiment, themes, embeddings (Claude Haiku + OpenAI)
@@ -86,7 +86,7 @@ Edit `config.yaml` to add your Twitter/X list(s):
 lists:
   - id: "2001952451281531011"    # Your X list ID (from the list URL)
     name: "Fintwit Macro"
-    scrape_interval_min: 30       # How often to scrape (minutes)
+    scrape_interval_min: 120       # How often to scrape (minutes)
     active: true
 
   # Add more lists:
@@ -112,7 +112,7 @@ npm start
 ```
 
 The system starts:
-- Scraping your lists every 30 minutes
+- Scraping your lists every 2 hours
 - Enriching tweets with AI (entities, sentiment, themes)
 - Delivering digests to Telegram at scheduled times
 - Dashboard available at `http://localhost:3000`
@@ -221,7 +221,7 @@ All models accessed through a single OpenRouter API key:
    lists:
      - id: "existing_list_id"
        name: "Existing List"
-       scrape_interval_min: 30
+       scrape_interval_min: 120
        active: true
      - id: "new_list_id"
        name: "New List Name"

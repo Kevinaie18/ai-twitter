@@ -375,9 +375,11 @@ function parseTweetEntry(entry: any, listId: string): ParsedEntry | null {
   }
 
   // ── Author info ──────────────────────────────────────────────────────
-  const authorHandle: string = userLegacy?.screen_name ?? 'unknown';
-  const authorName: string = userLegacy?.name ?? authorHandle;
-  const followerCount: number = userLegacy?.followers_count ?? 0;
+  // X moves fields between legacy and core — check both with core first
+  const userCore = userResult?.core;
+  const authorHandle: string = userCore?.screen_name ?? userLegacy?.screen_name ?? 'unknown';
+  const authorName: string = userCore?.name ?? userLegacy?.name ?? authorHandle;
+  const followerCount: number = userCore?.followers_count ?? userLegacy?.followers_count ?? 0;
 
   // ── Engagement metrics ───────────────────────────────────────────────
   const engagementLikes: number = legacy?.favorite_count ?? 0;

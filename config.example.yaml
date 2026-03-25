@@ -2,7 +2,7 @@
 lists:
   - id: "2001952451281531011"
     name: "Fintwit Macro"
-    scrape_interval_min: 30
+    scrape_interval_min: 120
     active: true
 
 digest:
