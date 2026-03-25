@@ -1,5 +1,5 @@
 import { Bot } from 'grammy';
-import OpenAI from 'openai';
+import { OpenRouter } from '@openrouter/sdk';
 import {
   getDb,
   searchSimilar,
@@ -115,21 +115,22 @@ export async function sendAlert(bot: Bot, chatId: string, alertText: string): Pr
 
 // ─── Semantic Search for /ask ────────────────────────────────────────────────
 
-function createOpenRouterClient(apiKey: string): OpenAI {
-  return new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey,
-  });
+function createClient(apiKey: string): OpenRouter {
+  return new OpenRouter({ apiKey });
 }
 
 async function embedQuery(apiKey: string, query: string): Promise<number[]> {
-  const client = createOpenRouterClient(apiKey);
-  const response = await client.embeddings.create({
+  const client = createClient(apiKey);
+  const response = await client.embeddings.generate({
     model: 'openai/text-embedding-3-small',
     input: query,
+    encodingFormat: 'float',
     dimensions: 1536,
   });
-  return response.data[0].embedding;
+  if (typeof response === 'string') {
+    throw new Error('Embeddings API returned unexpected string response');
+  }
+  return response.data[0].embedding as number[];
 }
 
 async function askSonnet(
@@ -137,7 +138,7 @@ async function askSonnet(
   query: string,
   tweets: any[],
 ): Promise<string> {
-  const client = createOpenRouterClient(apiKey);
+  const client = createClient(apiKey);
 
   const tweetContext = tweets
     .map((tw, i) => {
@@ -146,13 +147,13 @@ async function askSonnet(
     })
     .join('\n\n');
 
-  const response = await client.chat.completions.create({
+  const response = await client.chat.send({
     model: 'anthropic/claude-sonnet-4.6',
-    max_tokens: 1024,
+    maxTokens: 1024,
     messages: [
-      { role: 'system', content: `You are a financial intelligence assistant. Answer the user's question based ONLY on the provided tweets. Be concise and specific. Cite sources using @handle references. If the tweets don't contain enough information to answer, say so clearly.` },
+      { role: 'system' as const, content: `You are a financial intelligence assistant. Answer the user's question based ONLY on the provided tweets. Be concise and specific. Cite sources using @handle references. If the tweets don't contain enough information to answer, say so clearly.` },
       {
-        role: 'user',
+        role: 'user' as const,
         content: `Question: ${query}\n\nHere are the ${tweets.length} most relevant tweets from our database:\n\n${tweetContext}\n\nProvide a concise, specific answer with @handle citations.`,
       },
     ],
@@ -163,7 +164,7 @@ async function askSonnet(
     throw new Error('Sonnet returned no text content');
   }
 
-  return textContent.trim();
+  return String(textContent).trim();
 }
 
 function getTweetsByIds(tweetIds: string[]): any[] {

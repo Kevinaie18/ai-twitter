@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { OpenRouter } from '@openrouter/sdk';
 import type { Tweet, Entity, Theme } from './types.js';
 import {
   getDb,
@@ -130,10 +130,7 @@ async function callHaiku(
   apiKey: string,
   tweets: Tweet[],
 ): Promise<{ result: HaikuBatchResponse; inputTokens: number; outputTokens: number }> {
-  const openrouter = new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey,
-  });
+  const client = new OpenRouter({ apiKey });
 
   const tweetsPayload = tweets.map((t) => ({
     tweet_id: t.id,
@@ -144,20 +141,20 @@ async function callHaiku(
     retweets: t.engagement_retweets,
   }));
 
-  const response = await openrouter.chat.completions.create({
+  const response = await client.chat.send({
     model: 'anthropic/claude-haiku-4.5',
-    max_tokens: 4096,
+    maxTokens: 4096,
     messages: [
-      { role: 'system', content: HAIKU_SYSTEM_PROMPT },
+      { role: 'system' as const, content: HAIKU_SYSTEM_PROMPT },
       {
-        role: 'user',
+        role: 'user' as const,
         content: `Analyze the following ${tweets.length} tweet(s) and return structured JSON:\n\n${JSON.stringify(tweetsPayload, null, 2)}`,
       },
     ],
   });
 
   const textContent = response.choices?.[0]?.message?.content;
-  if (!textContent) {
+  if (!textContent || typeof textContent !== 'string') {
     throw new Error('Haiku returned no text content');
   }
 
@@ -172,8 +169,8 @@ async function callHaiku(
 
   return {
     result: parsed,
-    inputTokens: response.usage?.prompt_tokens ?? 0,
-    outputTokens: response.usage?.completion_tokens ?? 0,
+    inputTokens: (response.usage as any)?.prompt_tokens ?? 0,
+    outputTokens: (response.usage as any)?.completion_tokens ?? 0,
   };
 }
 
@@ -183,22 +180,24 @@ async function callOpenAIEmbeddings(
   apiKey: string,
   texts: string[],
 ): Promise<{ embeddings: number[][]; totalTokens: number }> {
-  const openrouter = new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey,
-  });
+  const client = new OpenRouter({ apiKey });
 
-  const response = await openrouter.embeddings.create({
+  const response = await client.embeddings.generate({
     model: 'openai/text-embedding-3-small',
     input: texts,
+    encodingFormat: 'float',
     dimensions: 1536,
   });
 
-  const embeddings = response.data
-    .sort((a, b) => a.index - b.index)
-    .map((d) => d.embedding);
+  if (typeof response === 'string') {
+    throw new Error('Embeddings API returned unexpected string response');
+  }
 
-  const totalTokens = response.usage.total_tokens;
+  const embeddings = [...response.data]
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+    .map((d) => d.embedding as number[]);
+
+  const totalTokens = response.usage?.totalTokens ?? 0;
 
   return { embeddings, totalTokens };
 }

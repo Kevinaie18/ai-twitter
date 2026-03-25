@@ -19,7 +19,7 @@
     "grammy": "^1.35.0",
     "hono": "^4.7.0",
     "node-cron": "^3.0.3",
-    "openai": "^4.85.0",
+    "@openrouter/sdk": "^0.1.0",
     "yaml": "^2.7.0"
   },
   "devDependencies": {

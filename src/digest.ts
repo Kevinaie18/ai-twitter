@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import { OpenRouter } from '@openrouter/sdk';
 import {
   getDb,
   getDigestTweets,
@@ -356,10 +356,7 @@ async function callOpus(
   alerts: ConsensusAlert[],
   emerging: EmergingNarrative[],
 ): Promise<string> {
-  const openrouter = new OpenAI({
-    baseURL: 'https://openrouter.ai/api/v1',
-    apiKey,
-  });
+  const client = new OpenRouter({ apiKey });
 
   // Build structured prompt sections
   const sections: string[] = [];
@@ -502,22 +499,23 @@ Rules:
 - Include price data only when available and relevant.
 - Maximum 800 words total.`;
 
-  const response = await openrouter.chat.completions.create({
+  const response = await client.chat.send({
     model: 'anthropic/claude-opus-4.6',
-    max_tokens: 2048,
+    maxTokens: 2048,
     messages: [
-      { role: 'system', content: systemPrompt },
+      { role: 'system' as const, content: systemPrompt },
       {
-        role: 'user',
+        role: 'user' as const,
         content: `Generate the digest from the following data:\n\n${dataPrompt}`,
       },
     ],
   });
 
-  const textContent = response.choices?.[0]?.message?.content;
-  if (!textContent) {
+  const rawContent = response.choices?.[0]?.message?.content;
+  if (!rawContent) {
     throw new Error('Opus returned no text content');
   }
 
+  const textContent = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent);
   return textContent.trim();
 }
