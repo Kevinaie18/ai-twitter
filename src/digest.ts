@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import {
   getDb,
   getDigestTweets,
@@ -356,7 +356,10 @@ async function callOpus(
   alerts: ConsensusAlert[],
   emerging: EmergingNarrative[],
 ): Promise<string> {
-  const anthropic = new Anthropic({ apiKey });
+  const openrouter = new OpenAI({
+    baseURL: 'https://openrouter.ai/api/v1',
+    apiKey,
+  });
 
   // Build structured prompt sections
   const sections: string[] = [];
@@ -499,11 +502,11 @@ Rules:
 - Include price data only when available and relevant.
 - Maximum 800 words total.`;
 
-  const response = await anthropic.messages.create({
-    model: 'claude-opus-4-0-20250514',
+  const response = await openrouter.chat.completions.create({
+    model: 'anthropic/claude-opus-4.6',
     max_tokens: 2048,
-    system: systemPrompt,
     messages: [
+      { role: 'system', content: systemPrompt },
       {
         role: 'user',
         content: `Generate the digest from the following data:\n\n${dataPrompt}`,
@@ -511,10 +514,10 @@ Rules:
     ],
   });
 
-  const textBlock = response.content.find((b) => b.type === 'text');
-  if (!textBlock || textBlock.type !== 'text') {
+  const textContent = response.choices?.[0]?.message?.content;
+  if (!textContent) {
     throw new Error('Opus returned no text content');
   }
 
-  return textBlock.text.trim();
+  return textContent.trim();
 }

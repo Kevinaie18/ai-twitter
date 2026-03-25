@@ -14,7 +14,6 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
     "@hono/node-server": "^1.13.0",
     "better-sqlite3": "^11.7.0",
     "grammy": "^1.35.0",
