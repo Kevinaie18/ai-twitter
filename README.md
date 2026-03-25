@@ -14,25 +14,67 @@ Your curated X list (~100 accounts)
         |
         v
   Enrich: entities, sentiment, themes, embeddings (Claude Haiku + OpenAI)
+  Auto-discover themes via embedding similarity + Sonnet taxonomy architect
         |
         v
-  Intelligence: consensus detection, narrative tracking, contrarian signals
+  Intelligence: analyst consensus, narrative tracking, delta detection, track records
         |
         v
-  Deliver: Telegram digest (2x daily) + Web dashboard + On-demand queries
+  Deliver: Telegram digest (TL;DR + deep dive) + Web dashboard + AI-powered commands
 ```
 
-**Twice-daily digests** summarize overnight/daytime activity, ranked by theme and importance. **Consensus alerts** fire when your list aligns too strongly on a position — a crowded-trade warning. **Semantic search** lets you query weeks of history: "what did my list say about Iran sanctions?"
+**Twice-daily digests** lead with what changed since last time — consensus shifts, new themes, account flips. **Analyst consensus alerts** fire when your curated list aligns strongly on a position. **Source credibility** tags distinguish journalists from aggregators. **Track records** log directional calls and compute hit rates over time. **Semantic search** lets you query weeks of history.
 
 ## Who This Is For
 
-Investment professionals, fund managers, and serious market participants who follow curated fintwit accounts covering:
-- Semiconductors / photonics
-- Geopolitics (Middle East, China)
-- Macro / rates / oil
-- AI infrastructure
-- Crypto
-- Options flow
+Investment professionals, fund managers, and serious market participants who follow curated analyst/research accounts covering any combination of themes — the system auto-discovers new themes as they emerge.
+
+## Features
+
+### Intelligence Layer
+- **Delta-first digests** — "What changed since last time" is the first section. Consensus shifts, new themes, dropped themes.
+- **Analyst consensus** — One vote per account per window. Alerts when ≥80% align. Historical context and price backtesting.
+- **Source credibility tags** — Tag accounts as `journalist`, `institutional`, `analyst`, `aggregator`, `unverified` in config. Digest prioritizes high-credibility sources.
+- **Track record engine** — Logs directional calls (bullish/bearish + ticker), resolves against price data, computes per-account hit rates. Opt-in.
+- **Signal noise floor** — Themes below configurable thresholds (min accounts, min engagement) are filtered from the digest.
+
+### Auto-Discovering Theme Taxonomy
+Themes are not hardcoded. The system uses a 3-tier architecture:
+1. **Haiku** extracts a `topic_description` (free text) + assigns known themes when obvious
+2. **Embedding similarity** (cosine ≥0.82) matches tweets against a theme registry
+3. **Sonnet** (called ~1x/week) names genuinely new themes when 3+ unmatched descriptions cluster together
+
+Core themes (semis, macro, crypto, etc.) are seeded at startup. New themes auto-appear in consensus tracking, digests, and all bot commands. No code changes needed.
+
+### Telegram Bot
+| Command | What It Does |
+|---------|-------------|
+| `/ask <question>` | Semantic search + Sonnet synthesis with @handle citations |
+| `/consensus` | Current analyst consensus map across all themes |
+| `/theme <name>` | AI-synthesized deep dive: stance, key voices, debate, what to watch |
+| `/who <handle>` | AI-synthesized account profile: specialization, track record, conviction |
+| `/compare` | Cross-list divergence (when 2+ lists active) |
+| `/status` | System health: scraper status, enrichment queue, API costs |
+
+Commands `/theme` and `/who` include AI synthesis (Haiku) above the raw data — 3-4 sentences of actionable intelligence.
+
+### Telegram Digest Format
+Configurable as `single` (one message) or `split` (recommended):
+- **TL;DR** (~150 words) — sent as the primary message, scannable on mobile
+- **Deep dive** — full digest sent as a threaded reply
+
+### Centralized Prompts
+All 7 AI prompts live in `src/prompts.ts` — edit to iterate on output quality without touching logic:
+
+| Prompt | Model | Purpose |
+|--------|-------|---------|
+| `ENRICHMENT_SYSTEM` | Haiku | Entity/sentiment/topic extraction with RT/QT handling |
+| `DIGEST_SYSTEM` | Opus | Delta-first digest with credibility and track records |
+| `TLDR_SYSTEM` | Haiku | Priority-ranked compression for Telegram |
+| `ASK_SYSTEM` | Sonnet | Answer synthesis with analyst credibility weighting |
+| `THEME_SYNTHESIS_SYSTEM` | Haiku | 4-sentence theme briefing (stance/voices/debate/watch) |
+| `WHO_SYNTHESIS_SYSTEM` | Haiku | 3-sentence account profile (specialization/stance/track record) |
+| `THEME_ARCHITECT_SYSTEM` | Sonnet | Names new themes from clustered unmatched descriptions |
 
 ## Quick Start
 
@@ -80,7 +122,7 @@ DASHBOARD_PASS=your_secure_password
 MAX_ENRICHMENT_COST_PER_DAY=5.00
 ```
 
-Edit `config.yaml` to add your Twitter/X list(s):
+Edit `config.yaml`:
 
 ```yaml
 lists:
@@ -89,19 +131,42 @@ lists:
     scrape_interval_min: 120       # How often to scrape (minutes)
     active: true
 
-  # Add more lists:
-  # - id: "1234567890"
-  #   name: "Africa Tech"
-  #   scrape_interval_min: 60
-  #   active: true
-
 digest:
   timezone: "UTC"
-  morning_hour: 7     # Morning digest at 7:00 UTC
-  evening_hour: 18    # Evening digest at 18:00 UTC
+  morning_hour: 7
+  evening_hour: 18
+  max_themes: 4                 # Max themes in digest
+  delta_enabled: true           # Show "what changed" section
+  format: split                 # 'single' or 'split' (TL;DR + deep dive)
+  tldr_max_words: 150           # Max words for TL;DR
 
 consensus:
-  threshold_pct: 80   # Alert when >80% of accounts agree on direction
+  threshold_pct: 80
+
+signal_floor:
+  min_accounts: 3               # Drop themes with fewer unique authors
+  min_engagement: 50            # Drop themes with less total engagement
+
+# Tag your accounts for credibility-weighted digests
+accounts:
+  default_tag: unverified
+  credibility_tags:
+    BarakRavid: journalist
+    citrini: analyst
+    StockNews690137: aggregator
+
+# Map custom themes to tickers for price backtesting
+theme_tickers:
+  biotech: ["XBI", "IBB"]
+  defense: ["ITA", "LMT"]
+
+# Track record engine (opt-in)
+track_record:
+  enabled: false
+  resolution_days: 5
+  min_confidence: 0.6
+  hit_threshold_pct: 0.5
+  min_calls_to_display: 5
 ```
 
 ### 3. Build and run
@@ -113,20 +178,18 @@ npm start
 
 The system starts:
 - Scraping your lists every 2 hours
-- Enriching tweets with AI (entities, sentiment, themes)
+- Enriching tweets with AI (entities, sentiment, auto-discovered themes)
 - Delivering digests to Telegram at scheduled times
+- Discovering new themes every 6 hours
+- Resolving track record calls daily (if enabled)
 - Dashboard available at `http://localhost:3000`
 
 ### 4. Deploy to VPS (production)
 
 ```bash
-# Copy the systemd service file
 sudo cp deploy/twitter-intel.service /etc/systemd/system/
 sudo systemctl enable twitter-intel
 sudo systemctl start twitter-intel
-
-# Or use the deploy script (from your local machine)
-REMOTE_HOST=your-vps-ip ./scripts/deploy.sh
 ```
 
 ## How to Get Your Twitter/X Cookies
@@ -138,38 +201,7 @@ REMOTE_HOST=your-vps-ip ./scripts/deploy.sh
    - `auth_token` → paste into `TWITTER_AUTH_TOKEN`
    - `ct0` → paste into `TWITTER_CT0`
 
-Cookies expire periodically. When they do, the bot sends a Telegram alert: "Scraper auth failed — refresh cookies in .env". Just repeat the steps above and paste new values — no restart needed (hot-reloaded on next scrape cycle).
-
-## How to Find Your X List ID
-
-1. Go to your list on x.com (e.g., `https://x.com/i/lists/2001952451281531011`)
-2. The number at the end of the URL is your list ID
-3. Add it to `config.yaml`
-
-## Telegram Commands
-
-| Command | What It Does |
-|---------|-------------|
-| `/ask <question>` | Semantic search across your tweet archive. "What did my list say about Iran?" |
-| `/consensus` | Current consensus map across all themes with trend arrows |
-| `/theme <name>` | Deep dive on a theme: sentiment trend, top tweets, key accounts |
-| `/who <handle>` | Account profile: what they've been saying, their themes, sentiment lean |
-| `/compare` | Cross-list divergence (when 2+ lists are active) |
-| `/status` | System health: scraper status, enrichment queue, API costs |
-
-## Web Dashboard
-
-Access at `http://your-vps:3000` (protected by basic auth).
-
-**5 pages:**
-
-- **Dashboard** — consensus alerts, theme heatmap, sentiment trends, latest digest
-- **Themes** — deep dive per theme with 30-day charts and top tweets
-- **Accounts** — sortable table of all tracked accounts with activity stats
-- **Search** — natural language search across your entire tweet archive
-- **Settings** — system health, scraper status, API cost monitoring
-
-Dark mode by default (toggle available). Financial terminal aesthetic — dense, professional, built for information consumption.
+Cookies expire periodically. The bot sends a Telegram alert when they do. Just paste new values in `.env` — no restart needed (hot-reloaded).
 
 ## Architecture
 
@@ -183,102 +215,91 @@ Dark mode by default (toggle available). Financial terminal aesthetic — dense,
 │                   Hono                             │
 │                   (dashboard)                      │
 │                                                    │
+│  Cron jobs:                                        │
+│    Scrape (per-list interval)                      │
+│    Enrich (every 5 min)                            │
+│    Theme discovery (every 6h, Sonnet)              │
+│    Digest (morning + evening)                      │
+│    Track record resolution (daily)                 │
+│                                                    │
 │  External APIs:                                    │
 │    Twitter/X GraphQL (session cookies)             │
-│    OpenRouter (Claude Haiku/Opus/Sonnet + OpenAI)  │
+│    OpenRouter (Haiku/Opus/Sonnet + OpenAI)         │
 └──────────────────────────────────────────────────┘
 ```
 
-Everything runs in one Node.js process. One SQLite database file. No external databases, no message queues, no Docker. Deployable on any VPS with Node.js 22+.
+Everything runs in one Node.js process. One SQLite database file. No external databases, no message queues, no Docker.
 
 ### LLM Model Usage
 
 All models accessed through a single OpenRouter API key:
 
-| Task | Model | Purpose |
-|------|-------|---------|
-| Tweet enrichment | Claude Haiku 4.5 | Entity extraction, sentiment, theme tagging (25 tweets/batch) |
-| Digest generation | Claude Opus 4.6 | Structured intelligence digest with narrative synthesis |
-| /ask queries | Claude Sonnet 4.6 | Answer questions with tweet citations |
-| Embeddings | OpenAI text-embedding-3-small | Semantic search vectors (1536-dim) |
+| Task | Model | Frequency |
+|------|-------|-----------|
+| Tweet enrichment | Claude Haiku 4.5 | Every 5 min (25 tweets/batch) |
+| Digest generation | Claude Opus 4.6 | 2x daily |
+| TL;DR compression | Claude Haiku 4.5 | 2x daily (if split format) |
+| /ask queries | Claude Sonnet 4.6 | On-demand |
+| /theme synthesis | Claude Haiku 4.5 | On-demand |
+| /who synthesis | Claude Haiku 4.5 | On-demand |
+| Theme discovery | Claude Sonnet 4.6 | Every 6h (~$0.003/call) |
+| Embeddings | OpenAI text-embedding-3-small | Every 5 min (with enrichment) |
 
 ### Estimated Costs
 
-~$0.80/day ($24/month) for a list producing ~2,400 tweets/day. The cost circuit breaker in `.env` pauses enrichment if the daily limit is exceeded.
+~$0.80-1.00/day ($25-30/month) for a list producing ~2,400 tweets/day. Theme discovery adds ~$1-2/month. The cost circuit breaker in `.env` pauses enrichment if the daily limit is exceeded.
 
-## Data & Privacy
+### Database Tables
 
-- All data stored locally in SQLite (`data/intel.db`)
-- No data sent anywhere except OpenRouter (for LLM processing) and Telegram (for delivery)
-- Twitter scraping uses your personal session cookies — same as browsing X in your browser
-- Dashboard is password-protected and served from your VPS only
-
-## Adding a New List
-
-1. Find the list ID from the X URL
-2. Add it to `config.yaml`:
-   ```yaml
-   lists:
-     - id: "existing_list_id"
-       name: "Existing List"
-       scrape_interval_min: 120
-       active: true
-     - id: "new_list_id"
-       name: "New List Name"
-       scrape_interval_min: 60
-       active: true
-   ```
-3. Restart the service: `sudo systemctl restart twitter-intel`
-
-Cross-list intelligence activates automatically when 2+ lists are active. Use `/compare` in Telegram to see divergences.
-
-## Consensus & Contrarian Signals
-
-The core differentiator. The system tracks what your curated list thinks about each theme:
-
-- **One vote per account per digest window** — prevents prolific tweeters from skewing consensus
-- **Consensus alert at 80%+** (configurable) — "84% of your list is bearish on crude"
-- **Historical context** — "Last time consensus was this strong was Feb 12"
-- **Rolling averages** — computed at query time, always accurate
-- **Price backtesting** — shows what happened to related assets after past consensus events
-
-Consensus signals become meaningful after ~2 weeks of data accumulation. The system suppresses alerts for the first 7 days to avoid cold-start false positives.
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| "Scraper auth failed" Telegram alert | Refresh Twitter cookies in `.env` (see instructions above) |
-| No tweets appearing | Check `/status` in Telegram. Verify list ID is correct and list is public. |
-| Dashboard won't load | Check `DASHBOARD_PASS` is set in `.env`. Try `http://localhost:3000`. |
-| High API costs | Lower `max_tweets_per_scrape` in `config.yaml` or reduce scrape frequency |
-| Missing consensus alerts | Need 2+ weeks of data. Check `/consensus` for current state. |
-| Process keeps crashing | Check `journalctl -u twitter-intel -f` for errors. The systemd service auto-restarts. |
+| Table | Purpose |
+|-------|---------|
+| `tweets` | Raw scraped tweets with engagement metrics |
+| `accounts` | Author profiles with credibility tags |
+| `enrichments` | Sentiment, confidence, summary per tweet |
+| `tweet_entities` | Tickers, countries, people, topics |
+| `tweet_themes` | Theme assignments (core + auto-discovered) |
+| `theme_registry` | Living taxonomy — core themes + Sonnet-discovered |
+| `unmatched_topics` | Pending topic descriptions awaiting theme creation |
+| `consensus_snapshots` | Per-theme consensus over time |
+| `digest_snapshots` | Persisted digest state for delta tracking |
+| `directional_calls` | Track record: logged calls awaiting resolution |
+| `prices` | Price data for backtesting and call resolution |
+| `tweets_fts` | FTS5 full-text search index |
+| `tweet_embeddings` | sqlite-vec embeddings (1536-dim) |
 
 ## Project Structure
 
 ```
 src/
-  index.ts          Entry point — orchestrates cron, bot, dashboard
+  index.ts          Entry point — orchestrates all cron jobs
   config.ts         Config loader (YAML + .env, hot-reload)
   scraper.ts        Twitter/X GraphQL scraper with pagination
-  db.ts             SQLite + sqlite-vec + FTS5 database layer
-  enrichment.ts     Claude Haiku enrichment + OpenAI embeddings
-  intelligence.ts   Consensus detection + narrative tracking
-  digest.ts         Claude Opus digest generation
-  bot.ts            Telegram bot with all commands
+  db.ts             SQLite schema, migrations, all query functions
+  enrichment.ts     Haiku enrichment + embeddings + theme matching + theme discovery
+  intelligence.ts   Consensus detection + delta computation + call resolution
+  digest.ts         Opus digest generation + TL;DR + snapshot persistence
+  bot.ts            Telegram bot — 6 commands with AI synthesis
+  prompts.ts        All 7 AI prompts (edit here to improve output quality)
   types.ts          TypeScript interfaces
   dashboard/
     index.ts        Hono REST API + basic auth
     public/
       index.html    SPA dashboard (Lightweight Charts)
-config.yaml         List configuration + scheduling
+config.yaml         List configuration + all feature settings
 .env                API keys + credentials (gitignored)
-deploy/
-  twitter-intel.service   Systemd unit file
-scripts/
-  deploy.sh         One-command VPS deployment
 ```
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| "Scraper auth failed" alert | Refresh Twitter cookies in `.env` |
+| No tweets appearing | Check `/status`. Verify list ID is correct and list is public |
+| Commands not showing in Telegram | Restart the bot — `setMyCommands` runs on startup |
+| Dashboard returns empty | Verify `config.yaml` has the correct list ID |
+| High API costs | Lower `max_tweets_per_scrape` or reduce scrape frequency |
+| Missing consensus alerts | Need 2+ weeks of data. Check `/consensus` |
+| New theme not appearing | Themes auto-discover every 6h. Check `theme_registry` table |
 
 ## License
 
