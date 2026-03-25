@@ -30,10 +30,13 @@ interface HaikuTweetResult {
     | 'options'
     | 'energy'
     | 'china_asia'
+    | 'fixed_income'
+    | 'earnings'
     | 'other'
   >;
   sentiment: 'bullish' | 'bearish' | 'neutral';
   sentiment_confidence: number;
+  sentiment_reasoning?: string;
   summary: string;
 }
 
@@ -357,7 +360,7 @@ export async function enrichBatch(
       const VALID_SENTIMENTS = new Set(['bullish', 'bearish', 'neutral']);
       const VALID_THEMES = new Set([
         'semis', 'geopolitics', 'macro', 'ai_infra', 'crypto',
-        'options', 'energy', 'china_asia', 'other',
+        'options', 'energy', 'china_asia', 'fixed_income', 'earnings', 'other',
       ]);
 
       if (
@@ -425,7 +428,7 @@ export async function enrichBatch(
         sentiment: haikuData.sentiment,
         sentiment_confidence: Math.max(0, Math.min(1, Number(haikuData.sentiment_confidence) || 0.5)),
         novelty_score: noveltyScore,
-        summary: (haikuData.summary ?? '').slice(0, 100),
+        summary: (haikuData.summary ?? '').slice(0, 120),
       });
 
       // Insert embedding into sqlite-vec

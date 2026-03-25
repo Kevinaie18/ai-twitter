@@ -559,7 +559,7 @@ async function callOpus(
 
   const dataPrompt = sections.join('\n');
 
-  const systemPrompt = DIGEST_SYSTEM;
+  const systemPrompt = DIGEST_SYSTEM(listName, tweetCount, since);
 
   const response = await client.chat.send({
     model: 'anthropic/claude-opus-4.6',

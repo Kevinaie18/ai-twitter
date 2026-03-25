@@ -21,6 +21,8 @@ const THEME_TICKER_MAP: Record<string, string[]> = {
   china_asia: ['FXI', 'KWEB', 'EWJ'],
   options: ['VIX', 'SPY'],
   geopolitics: ['GLD', 'TLT', 'DXY'],
+  fixed_income: ['TLT', 'IEF', 'HYG'],
+  earnings: ['SPY', 'QQQ'],
 };
 
 // ─── Consensus Snapshot Generation ───────────────────────────────────────────
