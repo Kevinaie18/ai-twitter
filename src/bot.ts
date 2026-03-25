@@ -184,6 +184,31 @@ async function askSonnet(
   return String(textContent).trim();
 }
 
+async function synthesizeWithHaiku(
+  apiKey: string,
+  systemPrompt: string,
+  data: string,
+): Promise<string | null> {
+  if (!apiKey) return null;
+  try {
+    const client = createClient(apiKey);
+    const response = await client.chat.send({
+      model: 'anthropic/claude-haiku-4.5',
+      maxTokens: 512,
+      messages: [
+        { role: 'system' as const, content: systemPrompt },
+        { role: 'user' as const, content: data },
+      ],
+    });
+    const content = response.choices?.[0]?.message?.content;
+    if (!content) return null;
+    return String(content).trim();
+  } catch (err) {
+    console.warn('[bot] Haiku synthesis failed:', err);
+    return null;
+  }
+}
+
 function getTweetsByIds(tweetIds: string[]): any[] {
   const db = getDb();
   if (tweetIds.length === 0) return [];
@@ -427,7 +452,20 @@ export function createBot(token: string, env: Record<string, string>): Bot {
         }
       }
 
-      await sendLongMessage(bot, ctx.chat.id.toString(), sections.join('\n'));
+      const rawData = sections.join('\n');
+
+      // AI synthesis: summarize the theme data into actionable intelligence
+      const synthesis = await synthesizeWithHaiku(
+        openrouterKey,
+        `You are a financial intelligence analyst. Summarize this theme data into 3-4 sentences of actionable intelligence. Focus on: what the consensus is, who the key voices are, what's the debate, and what to watch next. Be concise and specific. Use @handles.`,
+        rawData,
+      );
+
+      if (synthesis) {
+        await sendLongMessage(bot, ctx.chat.id.toString(), `${synthesis}\n\n---\n\n${rawData}`);
+      } else {
+        await sendLongMessage(bot, ctx.chat.id.toString(), rawData);
+      }
     } catch (err) {
       console.error('[bot /theme] Error:', err);
       await ctx.reply('Failed to retrieve theme data.');
@@ -524,7 +562,20 @@ export function createBot(token: string, env: Record<string, string>): Bot {
         }
       }
 
-      await sendLongMessage(bot, ctx.chat.id.toString(), lines.join('\n'));
+      const rawData = lines.join('\n');
+
+      // AI synthesis: characterize this account in 2-3 sentences
+      const synthesis = await synthesizeWithHaiku(
+        openrouterKey,
+        `You are a financial intelligence analyst. Based on this account profile, write a 2-3 sentence characterization: what kind of voice is this person (macro trader, sector specialist, news aggregator, contrarian), what's their typical conviction level, and how reliable are they based on the data. Be direct and specific.`,
+        rawData,
+      );
+
+      if (synthesis) {
+        await sendLongMessage(bot, ctx.chat.id.toString(), `${synthesis}\n\n---\n\n${rawData}`);
+      } else {
+        await sendLongMessage(bot, ctx.chat.id.toString(), rawData);
+      }
     } catch (err) {
       console.error('[bot /who] Error:', err);
       await ctx.reply('Failed to retrieve account data.');
