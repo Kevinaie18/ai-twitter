@@ -1,12 +1,13 @@
 import { schedule } from 'node-cron';
 import { Bot } from 'grammy';
 import { loadConfig, loadEnv, getRequiredEnv } from './config.js';
-import { initDb, getUnenrichedTweets, getLastScrapedTweetId, getScrapeHealth } from './db.js';
+import { initDb, getUnenrichedTweets, getLastScrapedTweetId, getScrapeHealth, syncCredibilityTags } from './db.js';
 import { discoverQueryHash, scrapeList } from './scraper.js';
 import { enrichBatch } from './enrichment.js';
 import { generateDigest } from './digest.js';
 import { createBot, sendDigest, sendAlert } from './bot.js';
 import { createDashboard } from './dashboard/index.js';
+import { resolveOpenCalls } from './intelligence.js';
 import type { Config } from './types.js';
 
 // Global error handlers
@@ -26,6 +27,7 @@ async function main() {
 
   // Init database
   initDb('data/intel.db');
+  syncCredibilityTags(config);
   console.log('[init] Database ready');
 
   // Init Telegram bot
@@ -62,6 +64,7 @@ async function main() {
       const freshEnv = loadEnv(); // Hot-reload API keys
       const result = await enrichBatch(
         getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY'),
+        config,
       );
       if (result.processed > 0) {
         console.log(`[enrich] Processed ${result.processed}, failed ${result.failed}`);
@@ -77,6 +80,7 @@ async function main() {
   const eveningHour = config.digest?.evening_hour ?? 18;
 
   for (const hour of [morningHour, eveningHour]) {
+    const digestType = hour === morningHour ? 'morning' as const : 'evening' as const;
     schedule(`0 ${hour} * * *`, async () => {
       const freshEnv = loadEnv();
       const apiKey = getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY');
@@ -87,9 +91,9 @@ async function main() {
       for (const list of config.lists.filter(l => l.active)) {
         try {
           console.log(`[digest] Generating for "${list.name}"...`);
-          const result = await generateDigest(list.id, list.name, since, apiKey);
-          await sendDigest(bot, chatId, result.text);
-          console.log(`[digest] Sent for "${list.name}" (${result.tweet_count} tweets)`);
+          const result = await generateDigest(list.id, list.name, since, apiKey, config, digestType);
+          await sendDigest(bot, chatId, result);
+          console.log(`[digest] Sent for "${list.name}" (${result.tweet_count} tweets, delta: ${result.delta ? 'yes' : 'no'})`);
         } catch (err) {
           console.error(`[digest] Error for "${list.name}":`, err);
           await sendAlert(bot, chatId, `⚠️ Digest generation failed for ${list.name}: ${err}`);
@@ -98,6 +102,21 @@ async function main() {
     });
   }
   console.log(`[init] Digests scheduled at ${morningHour}:00 and ${eveningHour}:00 UTC`);
+
+  // ─── Track record resolution cron (daily at midnight UTC) ─────────
+  if (config.track_record?.enabled) {
+    schedule('0 0 * * *', () => {
+      try {
+        const result = resolveOpenCalls(config);
+        if (result.resolved > 0 || result.expired > 0) {
+          console.log(`[track-record] Resolved ${result.resolved}, expired ${result.expired}`);
+        }
+      } catch (err) {
+        console.error('[track-record] Resolution error:', err);
+      }
+    });
+    console.log('[init] Track record resolution scheduled daily at 00:00 UTC');
+  }
 
   console.log('[init] All systems ready ✓');
 }

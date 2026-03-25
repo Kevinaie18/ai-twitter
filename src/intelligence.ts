@@ -5,8 +5,10 @@ import {
   getRecentThemes,
   insertConsensusSnapshot,
   getPriceData,
+  getOpenCallsToResolve,
+  resolveCall,
 } from './db.js';
-import type { ConsensusSnapshot } from './types.js';
+import type { ConsensusSnapshot, Config, DigestSnapshot, DigestDelta } from './types.js';
 
 // ─── Theme-to-ticker mapping for backtesting ─────────────────────────────────
 
@@ -368,4 +370,104 @@ export function getPriceAfterConsensus(
   }
 
   return null;
+}
+
+// ─── Digest Delta Computation ──────────────────────────────────────────────
+
+export function computeDigestDelta(
+  currentThemes: string[],
+  currentConsensus: Map<string, ConsensusSnapshot>,
+  previousSnapshot: DigestSnapshot | null,
+): DigestDelta {
+  const delta: DigestDelta = {
+    new_themes: [],
+    dropped_themes: [],
+    consensus_shifts: [],
+  };
+
+  if (!previousSnapshot) return delta;
+
+  const prevThemes: string[] = JSON.parse(previousSnapshot.themes_json || '[]');
+  const prevConsensus: Record<string, { direction: string; pct: number }> = JSON.parse(previousSnapshot.consensus_json || '{}');
+
+  // New themes: in current but not in previous
+  delta.new_themes = currentThemes.filter(t => !prevThemes.includes(t));
+
+  // Dropped themes: in previous but not in current
+  delta.dropped_themes = prevThemes.filter(t => !currentThemes.includes(t));
+
+  // Consensus shifts: themes in both with direction or significant pct change
+  for (const theme of currentThemes) {
+    const curr = currentConsensus.get(theme);
+    const prev = prevConsensus[theme];
+    if (!curr || !prev) continue;
+
+    if (curr.consensus_direction !== prev.direction || Math.abs(curr.consensus_pct - prev.pct) > 10) {
+      delta.consensus_shifts.push({
+        theme,
+        old_direction: prev.direction,
+        old_pct: prev.pct,
+        new_direction: curr.consensus_direction,
+        new_pct: curr.consensus_pct,
+      });
+    }
+  }
+
+  return delta;
+}
+
+// ─── Track Record: Resolve Open Calls ──────────────────────────────────────
+
+export function resolveOpenCalls(config: Config): { resolved: number; expired: number } {
+  const resolutionDays = config.track_record?.resolution_days ?? 5;
+  const hitThreshold = config.track_record?.hit_threshold_pct ?? 0.5;
+  const calls = getOpenCallsToResolve(resolutionDays);
+
+  let resolved = 0;
+  let expired = 0;
+  const now = new Date().toISOString();
+
+  for (const call of calls) {
+    if (!call.ticker || call.price_at_call == null) {
+      resolveCall(call.id, now, null, null, null, 'no_data');
+      expired++;
+      continue;
+    }
+
+    const resolveDate = new Date(call.call_date);
+    resolveDate.setDate(resolveDate.getDate() + resolutionDays);
+    const resolveDateStr = resolveDate.toISOString().slice(0, 10);
+
+    const prices = getPriceData(call.ticker, resolveDateStr, resolveDateStr);
+    if (prices.length === 0) {
+      // Check if it's been too long (10+ days past resolution) — expire
+      const daysSinceCall = (Date.now() - new Date(call.call_date).getTime()) / (1000 * 60 * 60 * 24);
+      if (daysSinceCall > resolutionDays + 10) {
+        resolveCall(call.id, now, null, null, null, 'no_data');
+        expired++;
+      }
+      continue;
+    }
+
+    const resolvePrice = prices[0].close;
+    const changePct = ((resolvePrice - call.price_at_call) / call.price_at_call) * 100;
+    const roundedChange = Math.round(changePct * 100) / 100;
+
+    // Determine hit: price moved >= threshold in predicted direction
+    let hit: boolean;
+    if (call.direction === 'bullish') {
+      hit = roundedChange >= hitThreshold;
+    } else {
+      hit = roundedChange <= -hitThreshold;
+    }
+
+    resolveCall(call.id, now, resolvePrice, roundedChange, hit, 'resolved');
+    resolved++;
+  }
+
+  // Cleanup old resolved calls (>90 days)
+  const db = getDb();
+  db.prepare(`DELETE FROM directional_calls WHERE status IN ('resolved', 'expired', 'no_data') AND resolved_at < datetime('now', '-90 days')`).run();
+
+  return { resolved, expired };
 }

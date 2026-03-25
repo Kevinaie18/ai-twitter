@@ -1,11 +1,13 @@
 import { OpenRouter } from '@openrouter/sdk';
-import type { Tweet, Entity, Theme } from './types.js';
+import type { Tweet, Entity, Theme, Config } from './types.js';
 import {
   getDb,
   getUnenrichedTweets,
   markEnrichmentComplete,
   markEnrichmentFailed,
   insertEmbedding,
+  insertDirectionalCall,
+  getPriceData,
 } from './db.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -282,6 +284,7 @@ function computeNoveltyScore(
 
 export async function enrichBatch(
   apiKey: string,
+  config?: Config,
 ): Promise<{ processed: number; failed: number }> {
   const BATCH_SIZE = 25;
   const tweets = getUnenrichedTweets(BATCH_SIZE);
@@ -456,6 +459,35 @@ export async function enrichBatch(
           embErr,
         );
         // Don't mark as failed — enrichment data is still stored
+      }
+
+      // Detect and log directional calls for track record engine
+      if (config?.track_record?.enabled && haikuData.sentiment !== 'neutral') {
+        const minConf = config.track_record.min_confidence ?? 0.6;
+        const confidence = Math.max(0, Math.min(1, Number(haikuData.sentiment_confidence) || 0.5));
+        if (confidence >= minConf && haikuData.entities.tickers.length > 0) {
+          const resolutionDays = config.track_record.resolution_days ?? 5;
+          for (const ticker of haikuData.entities.tickers) {
+            // Look up current price
+            const today = new Date().toISOString().slice(0, 10);
+            const prices = getPriceData(ticker, today, today);
+            const priceAtCall = prices.length > 0 ? prices[0].close : null;
+
+            insertDirectionalCall({
+              author_id: tweet.author_id,
+              author_handle: tweet.author_handle,
+              tweet_id: tweet.id,
+              theme: validatedThemes[0],
+              ticker,
+              direction: haikuData.sentiment as 'bullish' | 'bearish',
+              confidence,
+              call_date: tweet.created_at,
+              price_at_call: priceAtCall,
+              resolution_days: resolutionDays,
+              status: 'open',
+            });
+          }
+        }
       }
 
       processed++;
