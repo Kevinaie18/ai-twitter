@@ -207,6 +207,16 @@ function getTweetsByIds(tweetIds: string[]): any[] {
 export function createBot(token: string, env: Record<string, string>): Bot {
   const bot = new Bot(token);
 
+  // Register commands in Telegram's menu (the / autocomplete list)
+  bot.api.setMyCommands([
+    { command: 'ask', description: 'Search tweets and get AI answers' },
+    { command: 'consensus', description: 'View consensus for all themes' },
+    { command: 'theme', description: 'Deep dive on a theme' },
+    { command: 'who', description: 'Account summary and track record' },
+    { command: 'compare', description: 'Cross-list divergence' },
+    { command: 'status', description: 'System health and API costs' },
+  ]).catch(err => console.warn('[bot] Failed to set command menu:', err));
+
   const openrouterKey = env.OPENROUTER_API_KEY ?? '';
 
   // ─── /ask <query> ───────────────────────────────────────────────────────────
