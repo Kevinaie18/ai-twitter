@@ -1,6 +1,5 @@
 import { Bot } from 'grammy';
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
+import { OpenRouter } from '@openrouter/sdk';
 import {
   getDb,
   searchSimilar,
@@ -116,22 +115,30 @@ export async function sendAlert(bot: Bot, chatId: string, alertText: string): Pr
 
 // ─── Semantic Search for /ask ────────────────────────────────────────────────
 
-async function embedQuery(openaiKey: string, query: string): Promise<number[]> {
-  const openai = new OpenAI({ apiKey: openaiKey });
-  const response = await openai.embeddings.create({
-    model: 'text-embedding-3-small',
+function createClient(apiKey: string): OpenRouter {
+  return new OpenRouter({ apiKey });
+}
+
+async function embedQuery(apiKey: string, query: string): Promise<number[]> {
+  const client = createClient(apiKey);
+  const response = await client.embeddings.generate({
+    model: 'openai/text-embedding-3-small',
     input: query,
+    encodingFormat: 'float',
     dimensions: 1536,
   });
-  return response.data[0].embedding;
+  if (typeof response === 'string') {
+    throw new Error('Embeddings API returned unexpected string response');
+  }
+  return response.data[0].embedding as number[];
 }
 
 async function askSonnet(
-  anthropicKey: string,
+  apiKey: string,
   query: string,
   tweets: any[],
 ): Promise<string> {
-  const anthropic = new Anthropic({ apiKey: anthropicKey });
+  const client = createClient(apiKey);
 
   const tweetContext = tweets
     .map((tw, i) => {
@@ -140,24 +147,24 @@ async function askSonnet(
     })
     .join('\n\n');
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-5-20250514',
-    max_tokens: 1024,
-    system: `You are a financial intelligence assistant. Answer the user's question based ONLY on the provided tweets. Be concise and specific. Cite sources using @handle references. If the tweets don't contain enough information to answer, say so clearly.`,
+  const response = await client.chat.send({
+    model: 'anthropic/claude-sonnet-4.6',
+    maxTokens: 1024,
     messages: [
+      { role: 'system' as const, content: `You are a financial intelligence assistant. Answer the user's question based ONLY on the provided tweets. Be concise and specific. Cite sources using @handle references. If the tweets don't contain enough information to answer, say so clearly.` },
       {
-        role: 'user',
+        role: 'user' as const,
         content: `Question: ${query}\n\nHere are the ${tweets.length} most relevant tweets from our database:\n\n${tweetContext}\n\nProvide a concise, specific answer with @handle citations.`,
       },
     ],
   });
 
-  const textBlock = response.content.find((b) => b.type === 'text');
-  if (!textBlock || textBlock.type !== 'text') {
+  const textContent = response.choices?.[0]?.message?.content;
+  if (!textContent) {
     throw new Error('Sonnet returned no text content');
   }
 
-  return textBlock.text.trim();
+  return String(textContent).trim();
 }
 
 function getTweetsByIds(tweetIds: string[]): any[] {
@@ -183,8 +190,7 @@ function getTweetsByIds(tweetIds: string[]): any[] {
 export function createBot(token: string, env: Record<string, string>): Bot {
   const bot = new Bot(token);
 
-  const openaiKey = env.OPENAI_API_KEY ?? '';
-  const anthropicKey = env.ANTHROPIC_API_KEY ?? '';
+  const openrouterKey = env.OPENROUTER_API_KEY ?? '';
 
   // ─── /ask <query> ───────────────────────────────────────────────────────────
 
@@ -203,8 +209,8 @@ export function createBot(token: string, env: Record<string, string>): Bot {
 
       // Try semantic search first via OpenAI embedding + sqlite-vec
       try {
-        if (!openaiKey) throw new Error('No OpenAI API key configured');
-        const queryEmbedding = await embedQuery(openaiKey, query.trim());
+        if (!openrouterKey) throw new Error('No OpenRouter API key configured');
+        const queryEmbedding = await embedQuery(openrouterKey, query.trim());
         const similar = searchSimilar(queryEmbedding, 20);
 
         if (similar.length > 0) {
@@ -232,8 +238,8 @@ export function createBot(token: string, env: Record<string, string>): Bot {
       }
 
       // Call Sonnet to synthesize an answer
-      if (!anthropicKey) {
-        // No Anthropic key — return raw results
+      if (!openrouterKey) {
+        // No OpenRouter key — return raw results
         const lines = tweets.slice(0, 10).map(
           (tw: any) =>
             `@${tw.author_handle} (${tw.created_at?.slice(0, 10) ?? ''}): ${tw.text.slice(0, 200)}`,
@@ -241,12 +247,12 @@ export function createBot(token: string, env: Record<string, string>): Bot {
         await sendLongMessage(
           bot,
           ctx.chat.id.toString(),
-          `Found ${tweets.length} tweets (${searchMethod} search). No Anthropic API key — showing raw results:\n\n${lines.join('\n\n')}`,
+          `Found ${tweets.length} tweets (${searchMethod} search). No OpenRouter API key — showing raw results:\n\n${lines.join('\n\n')}`,
         );
         return;
       }
 
-      const answer = await askSonnet(anthropicKey, query.trim(), tweets);
+      const answer = await askSonnet(openrouterKey, query.trim(), tweets);
       const header = `Search: ${searchMethod} | ${tweets.length} tweets analyzed\n\n`;
       await sendLongMessage(bot, ctx.chat.id.toString(), header + answer);
     } catch (err) {

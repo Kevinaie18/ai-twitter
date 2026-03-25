@@ -1,5 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
-import OpenAI from 'openai';
+import { OpenRouter } from '@openrouter/sdk';
 import type { Tweet, Entity, Theme } from './types.js';
 import {
   getDb,
@@ -131,7 +130,7 @@ async function callHaiku(
   apiKey: string,
   tweets: Tweet[],
 ): Promise<{ result: HaikuBatchResponse; inputTokens: number; outputTokens: number }> {
-  const anthropic = new Anthropic({ apiKey });
+  const client = new OpenRouter({ apiKey });
 
   const tweetsPayload = tweets.map((t) => ({
     tweet_id: t.id,
@@ -142,25 +141,25 @@ async function callHaiku(
     retweets: t.engagement_retweets,
   }));
 
-  const response = await anthropic.messages.create({
-    model: 'claude-haiku-4-5-20251001',
-    max_tokens: 4096,
-    system: HAIKU_SYSTEM_PROMPT,
+  const response = await client.chat.send({
+    model: 'anthropic/claude-haiku-4.5',
+    maxTokens: 4096,
     messages: [
+      { role: 'system' as const, content: HAIKU_SYSTEM_PROMPT },
       {
-        role: 'user',
+        role: 'user' as const,
         content: `Analyze the following ${tweets.length} tweet(s) and return structured JSON:\n\n${JSON.stringify(tweetsPayload, null, 2)}`,
       },
     ],
   });
 
-  const textBlock = response.content.find((b) => b.type === 'text');
-  if (!textBlock || textBlock.type !== 'text') {
+  const textContent = response.choices?.[0]?.message?.content;
+  if (!textContent || typeof textContent !== 'string') {
     throw new Error('Haiku returned no text content');
   }
 
   // Extract JSON from the response (handle markdown code blocks)
-  let jsonStr = textBlock.text.trim();
+  let jsonStr = textContent.trim();
   const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenceMatch) {
     jsonStr = fenceMatch[1].trim();
@@ -170,30 +169,35 @@ async function callHaiku(
 
   return {
     result: parsed,
-    inputTokens: response.usage.input_tokens,
-    outputTokens: response.usage.output_tokens,
+    inputTokens: (response.usage as any)?.prompt_tokens ?? 0,
+    outputTokens: (response.usage as any)?.completion_tokens ?? 0,
   };
 }
 
-// ─── OpenAI embeddings ──────────────────────────────────────────────────────
+// ─── Embeddings via OpenRouter ──────────────────────────────────────────────
 
 async function callOpenAIEmbeddings(
-  openaiKey: string,
+  apiKey: string,
   texts: string[],
 ): Promise<{ embeddings: number[][]; totalTokens: number }> {
-  const openai = new OpenAI({ apiKey: openaiKey });
+  const client = new OpenRouter({ apiKey });
 
-  const response = await openai.embeddings.create({
-    model: 'text-embedding-3-small',
+  const response = await client.embeddings.generate({
+    model: 'openai/text-embedding-3-small',
     input: texts,
+    encodingFormat: 'float',
     dimensions: 1536,
   });
 
-  const embeddings = response.data
-    .sort((a, b) => a.index - b.index)
-    .map((d) => d.embedding);
+  if (typeof response === 'string') {
+    throw new Error('Embeddings API returned unexpected string response');
+  }
 
-  const totalTokens = response.usage.total_tokens;
+  const embeddings = [...response.data]
+    .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
+    .map((d) => d.embedding as number[]);
+
+  const totalTokens = response.usage?.totalTokens ?? 0;
 
   return { embeddings, totalTokens };
 }
@@ -278,7 +282,6 @@ function computeNoveltyScore(
 
 export async function enrichBatch(
   apiKey: string,
-  openaiKey: string,
 ): Promise<{ processed: number; failed: number }> {
   const BATCH_SIZE = 25;
   const tweets = getUnenrichedTweets(BATCH_SIZE);
@@ -296,7 +299,7 @@ export async function enrichBatch(
 
   const [haikuResult, embeddingResult] = await Promise.allSettled([
     callHaiku(apiKey, tweets),
-    callOpenAIEmbeddings(openaiKey, texts),
+    callOpenAIEmbeddings(apiKey, texts),
   ]);
 
   // If Haiku call failed, mark all tweets as failed

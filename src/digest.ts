@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import { OpenRouter } from '@openrouter/sdk';
 import {
   getDb,
   getDigestTweets,
@@ -356,7 +356,7 @@ async function callOpus(
   alerts: ConsensusAlert[],
   emerging: EmergingNarrative[],
 ): Promise<string> {
-  const anthropic = new Anthropic({ apiKey });
+  const client = new OpenRouter({ apiKey });
 
   // Build structured prompt sections
   const sections: string[] = [];
@@ -499,22 +499,23 @@ Rules:
 - Include price data only when available and relevant.
 - Maximum 800 words total.`;
 
-  const response = await anthropic.messages.create({
-    model: 'claude-opus-4-0-20250514',
-    max_tokens: 2048,
-    system: systemPrompt,
+  const response = await client.chat.send({
+    model: 'anthropic/claude-opus-4.6',
+    maxTokens: 2048,
     messages: [
+      { role: 'system' as const, content: systemPrompt },
       {
-        role: 'user',
+        role: 'user' as const,
         content: `Generate the digest from the following data:\n\n${dataPrompt}`,
       },
     ],
   });
 
-  const textBlock = response.content.find((b) => b.type === 'text');
-  if (!textBlock || textBlock.type !== 'text') {
+  const rawContent = response.choices?.[0]?.message?.content;
+  if (!rawContent) {
     throw new Error('Opus returned no text content');
   }
 
-  return textBlock.text.trim();
+  const textContent = typeof rawContent === 'string' ? rawContent : JSON.stringify(rawContent);
+  return textContent.trim();
 }

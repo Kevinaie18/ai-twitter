@@ -60,8 +60,7 @@ async function main() {
     try {
       const freshEnv = loadEnv(); // Hot-reload API keys
       const result = await enrichBatch(
-        getRequiredEnv(freshEnv, 'ANTHROPIC_API_KEY'),
-        getRequiredEnv(freshEnv, 'OPENAI_API_KEY')
+        getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY'),
       );
       if (result.processed > 0) {
         console.log(`[enrich] Processed ${result.processed}, failed ${result.failed}`);
@@ -79,7 +78,7 @@ async function main() {
   for (const hour of [morningHour, eveningHour]) {
     schedule(`0 ${hour} * * *`, async () => {
       const freshEnv = loadEnv();
-      const apiKey = getRequiredEnv(freshEnv, 'ANTHROPIC_API_KEY');
+      const apiKey = getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY');
       const since = hour === morningHour
         ? new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString() // last 12h
         : new Date(Date.now() - 11 * 60 * 60 * 1000).toISOString(); // since morning
