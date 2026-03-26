@@ -12,9 +12,10 @@ import {
   getUnenrichedTweets,
   getAuthorTrackRecord,
 } from './db.js';
-import type { ConsensusSnapshot } from './types.js';
+import type { Config, ConsensusSnapshot } from './types.js';
 import { ASK_SYSTEM, THEME_SYNTHESIS_SYSTEM, WHO_SYNTHESIS_SYSTEM } from './prompts.js';
 import { getDailyCost } from './enrichment.js';
+import { generateDigest } from './digest.js';
 
 // ─── Telegram Helpers ────────────────────────────────────────────────────────
 
@@ -248,7 +249,7 @@ function getTweetsByIds(tweetIds: string[]): any[] {
  * Create and configure the Telegram bot with all commands registered.
  * The bot is NOT started — call bot.start() from the orchestrator.
  */
-export function createBot(token: string, env: Record<string, string>): Bot {
+export function createBot(token: string, env: Record<string, string>, config?: Config): Bot {
   const bot = new Bot(token);
 
   // Register commands in Telegram's menu (the / autocomplete list)
@@ -259,6 +260,7 @@ export function createBot(token: string, env: Record<string, string>): Bot {
     { command: 'who', description: 'Account summary and track record' },
     { command: 'compare', description: 'Cross-list divergence' },
     { command: 'status', description: 'System health and API costs' },
+    { command: 'digest', description: 'Generate digest now (use "full" for entire corpus)' },
   ]).catch(err => console.warn('[bot] Failed to set command menu:', err));
 
   const openrouterKey = env.OPENROUTER_API_KEY ?? '';
@@ -679,6 +681,47 @@ export function createBot(token: string, env: Record<string, string>): Bot {
     } catch (err) {
       console.error('[bot /compare] Error:', err);
       await ctx.reply('Failed to run cross-list comparison.');
+    }
+  });
+
+  // ─── /digest [full] ─────────────────────────────────────────────────────────
+
+  bot.command('digest', async (ctx) => {
+    if (!config || !openrouterKey) {
+      await ctx.reply('Digest generation requires config and OpenRouter API key.');
+      return;
+    }
+
+    const arg = ctx.match?.trim().toLowerCase();
+    const isFullCorpus = arg === 'full';
+    const mode = isFullCorpus ? 'initial' as const : 'manual' as const;
+
+    const db = getDb();
+    const lists = db
+      .prepare(`SELECT list_id, name FROM list_configs WHERE active = 1`)
+      .all() as Array<{ list_id: string; name: string }>;
+
+    if (lists.length === 0) {
+      await ctx.reply('No active lists configured.');
+      return;
+    }
+
+    await ctx.reply(isFullCorpus
+      ? 'Generating full-corpus baseline digest... this may take a minute.'
+      : 'Generating digest for last 12h...');
+
+    const since = isFullCorpus
+      ? new Date(0).toISOString()
+      : new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+
+    for (const list of lists) {
+      try {
+        const result = await generateDigest(list.list_id, list.name, since, openrouterKey, config, 'manual', mode);
+        await sendDigest(bot, ctx.chat.id.toString(), result);
+      } catch (err) {
+        console.error(`[bot /digest] Error for "${list.name}":`, err);
+        await ctx.reply(`Failed to generate digest for ${list.name}.`);
+      }
     }
   });
 

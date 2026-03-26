@@ -53,13 +53,14 @@ export async function generateDigest(
   apiKey: string,
   config: Config,
   digestType: 'morning' | 'evening' | 'manual' = 'manual',
+  mode: 'initial' | 'scheduled' | 'manual' = 'scheduled',
 ): Promise<DigestResult> {
   const now = new Date().toISOString();
 
-  // Step 1: Get all tweets with enrichments for the window
-  // Cap at 500 most recent to prevent cost blowout on large windows
+  // Step 1: Get tweets — cap depends on mode
+  // initial: no cap (full corpus baseline), scheduled: 500 cap, manual: no cap
   let tweets = getDigestTweets(listId, since);
-  if (tweets.length > 500) {
+  if (mode === 'scheduled' && tweets.length > 500) {
     console.warn(`[digest] Window returned ${tweets.length} tweets — capping to 500 most recent`);
     tweets = tweets.slice(0, 500); // Already sorted by created_at DESC
   }
