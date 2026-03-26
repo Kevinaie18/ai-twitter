@@ -40,6 +40,14 @@ accounts:
     # citrini: analyst
     # StockNews690137: aggregator
 
+# Theme-to-ticker mapping for price backtesting of custom themes
+# Core themes (semis, macro, crypto, etc.) have built-in mappings.
+# Add entries here for LLM-discovered custom themes.
+theme_tickers:
+  # biotech: ["XBI", "IBB"]
+  # defense: ["ITA", "LMT", "RTX"]
+  # real_estate: ["VNQ", "IYR"]
+
 # Track record engine — log directional calls and compute hit rates
 track_record:
   enabled: false               # opt-in: set to true to start tracking

@@ -1,5 +1,6 @@
 import { OpenRouter } from '@openrouter/sdk';
 import type { Tweet, Entity, Theme, Config } from './types.js';
+import { ENRICHMENT_SYSTEM, THEME_ARCHITECT_SYSTEM } from './prompts.js';
 import {
   getDb,
   getUnenrichedTweets,
@@ -8,6 +9,12 @@ import {
   insertEmbedding,
   insertDirectionalCall,
   getPriceData,
+  getAllThemeDescriptions,
+  incrementThemeCount,
+  insertUnmatchedTopic,
+  getRecentUnmatchedTopics,
+  deleteUnmatchedTopics,
+  insertThemeRegistryEntry,
 } from './db.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -20,19 +27,11 @@ interface HaikuTweetResult {
     people: string[];
     topics: string[];
   };
-  themes: Array<
-    | 'semis'
-    | 'geopolitics'
-    | 'macro'
-    | 'ai_infra'
-    | 'crypto'
-    | 'options'
-    | 'energy'
-    | 'china_asia'
-    | 'other'
-  >;
+  topic_description?: string;
+  themes: string[];
   sentiment: 'bullish' | 'bearish' | 'neutral';
   sentiment_confidence: number;
+  sentiment_reasoning?: string;
   summary: string;
 }
 
@@ -105,29 +104,6 @@ export function getDailyCost(): DailyCostEntry {
 
 // ─── Haiku entity extraction ────────────────────────────────────────────────
 
-const HAIKU_SYSTEM_PROMPT = `You are a financial tweet analyst. You extract structured information from tweets about markets, investing, and finance.
-
-For each tweet provided, extract:
-- entities: { tickers: string[], countries: string[], people: string[], topics: string[] }
-- themes: array of one or more from: ["semis", "geopolitics", "macro", "ai_infra", "crypto", "options", "energy", "china_asia", "other"]
-- sentiment: "bullish" | "bearish" | "neutral"
-- sentiment_confidence: 0.0 to 1.0
-- summary: one-line summary (max 100 chars)
-
-Respond with valid JSON matching this schema exactly:
-{
-  "tweets": [
-    {
-      "tweet_id": "string",
-      "entities": { "tickers": [], "countries": [], "people": [], "topics": [] },
-      "themes": [],
-      "sentiment": "bullish" | "bearish" | "neutral",
-      "sentiment_confidence": 0.0,
-      "summary": "string"
-    }
-  ]
-}`;
-
 async function callHaiku(
   apiKey: string,
   tweets: Tweet[],
@@ -147,7 +123,7 @@ async function callHaiku(
     model: 'anthropic/claude-haiku-4.5',
     maxTokens: 4096,
     messages: [
-      { role: 'system' as const, content: HAIKU_SYSTEM_PROMPT },
+      { role: 'system' as const, content: ENRICHMENT_SYSTEM },
       {
         role: 'user' as const,
         content: `Analyze the following ${tweets.length} tweet(s) and return structured JSON:\n\n${JSON.stringify(tweetsPayload, null, 2)}`,
@@ -280,6 +256,63 @@ function computeNoveltyScore(
   return 1 - maxSimilarity;
 }
 
+// ─── Theme matching via embedding similarity ───────────────────────────────
+
+// Cache: theme descriptions → embeddings (built lazily)
+let themeEmbeddingCache: Map<string, number[]> | null = null;
+
+function matchTopicToTheme(
+  tweetEmbedding: number[],
+): string | null {
+  const db = getDb();
+
+  // Build or refresh cache from theme registry
+  if (!themeEmbeddingCache) {
+    themeEmbeddingCache = new Map();
+    const themes = getAllThemeDescriptions();
+    for (const t of themes) {
+      // Use the most recent tweet embedding for each theme as a proxy
+      const row = db.prepare(`
+        SELECT te.embedding FROM tweet_embeddings te
+        JOIN tweet_themes tt ON te.tweet_id = tt.tweet_id
+        WHERE tt.theme = ?
+        ORDER BY te.rowid DESC LIMIT 1
+      `).get(t.theme) as { embedding: Buffer } | undefined;
+
+      if (row) {
+        const emb = Array.from(new Float32Array(
+          row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4,
+        ));
+        themeEmbeddingCache.set(t.theme, emb);
+      }
+    }
+  }
+
+  // Find best matching theme by cosine similarity
+  let bestTheme: string | null = null;
+  let bestSimilarity = 0;
+  const MATCH_THRESHOLD = 0.82;
+
+  for (const [theme, themeEmb] of themeEmbeddingCache) {
+    const sim = cosineSimilarity(tweetEmbedding, themeEmb);
+    if (sim > bestSimilarity) {
+      bestSimilarity = sim;
+      bestTheme = theme;
+    }
+  }
+
+  if (bestSimilarity >= MATCH_THRESHOLD && bestTheme) {
+    return bestTheme;
+  }
+
+  return null;
+}
+
+// Invalidate cache when new themes are created
+export function invalidateThemeEmbeddingCache(): void {
+  themeEmbeddingCache = null;
+}
+
 // ─── Main enrichment pipeline ───────────────────────────────────────────────
 
 export async function enrichBatch(
@@ -377,10 +410,6 @@ export async function enrichBatch(
     try {
       // Validate Haiku data against allowed values (LLM trust boundary)
       const VALID_SENTIMENTS = new Set(['bullish', 'bearish', 'neutral']);
-      const VALID_THEMES = new Set([
-        'semis', 'geopolitics', 'macro', 'ai_infra', 'crypto',
-        'options', 'energy', 'china_asia', 'other',
-      ]);
 
       if (
         !haikuData.sentiment ||
@@ -391,6 +420,32 @@ export async function enrichBatch(
         throw new Error(
           `Invalid Haiku data for tweet ${tweet.id}: missing sentiment or themes`,
         );
+      }
+
+      // ── Theme Resolution: Haiku themes + embedding-based matching ──
+      // Sanitize any themes Haiku provided
+      haikuData.themes = haikuData.themes
+        .map(th => th.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, ''))
+        .filter(th => th.length > 0);
+
+      // If Haiku returned no themes but gave a topic_description, try to match
+      // it against the theme registry using embedding similarity
+      if (haikuData.themes.length === 0 && haikuData.topic_description) {
+        const matched = matchTopicToTheme(embedding);
+        if (matched) {
+          haikuData.themes = [matched];
+        } else {
+          // No match — store for Sonnet to name later, use "unclassified" for now
+          insertUnmatchedTopic(haikuData.topic_description, tweet.id);
+          haikuData.themes = ['unclassified'];
+        }
+      } else if (haikuData.themes.length === 0) {
+        haikuData.themes = ['unclassified'];
+      }
+
+      // Increment theme counts in registry
+      for (const th of haikuData.themes) {
+        incrementThemeCount(th);
       }
 
       // Compute novelty score
@@ -430,12 +485,11 @@ export async function enrichBatch(
         });
       }
 
-      // Build themes (filter to valid values only)
-      const validatedThemes = haikuData.themes.filter((th) => VALID_THEMES.has(th));
-      if (validatedThemes.length === 0) {
-        throw new Error(`No valid themes for tweet ${tweet.id}`);
+      // Build themes (accept all sanitized themes — core + custom)
+      if (haikuData.themes.length === 0) {
+        throw new Error(`No themes for tweet ${tweet.id}`);
       }
-      const themes: Theme[] = validatedThemes.map((th) => ({
+      const themes: Theme[] = haikuData.themes.map((th) => ({
         tweet_id: tweet.id,
         theme: th,
       }));
@@ -447,7 +501,7 @@ export async function enrichBatch(
         sentiment: haikuData.sentiment,
         sentiment_confidence: Math.max(0, Math.min(1, Number(haikuData.sentiment_confidence) || 0.5)),
         novelty_score: noveltyScore,
-        summary: (haikuData.summary ?? '').slice(0, 100),
+        summary: (haikuData.summary ?? '').slice(0, 120),
       });
 
       // Insert embedding into sqlite-vec
@@ -477,7 +531,7 @@ export async function enrichBatch(
               author_id: tweet.author_id,
               author_handle: tweet.author_handle,
               tweet_id: tweet.id,
-              theme: validatedThemes[0],
+              theme: haikuData.themes[0],
               ticker,
               direction: haikuData.sentiment as 'bullish' | 'bearish',
               confidence,
@@ -506,4 +560,80 @@ export async function enrichBatch(
   );
 
   return { processed, failed };
+}
+
+// ─── Theme Discovery: Sonnet creates new themes from unmatched topics ───────
+
+/**
+ * Process unmatched topic descriptions: cluster them and ask Sonnet to name
+ * new themes. Called periodically (e.g., every 6 hours).
+ * Only creates a theme when 3+ descriptions cluster together.
+ */
+export async function discoverNewThemes(apiKey: string): Promise<{ created: number; ignored: number }> {
+  const unmatched = getRecentUnmatchedTopics(24); // last 24h of unmatched
+  if (unmatched.length < 3) {
+    return { created: 0, ignored: 0 };
+  }
+
+  const existingThemes = getAllThemeDescriptions();
+
+  // Safety cap: don't let the theme registry grow unbounded
+  const MAX_THEMES = 100;
+  if (existingThemes.length >= MAX_THEMES) {
+    console.warn(`[themes] Theme registry at ${existingThemes.length} themes (cap: ${MAX_THEMES}). Skipping discovery.`);
+    deleteUnmatchedTopics(unmatched.map(u => u.id));
+    return { created: 0, ignored: unmatched.length };
+  }
+
+  const client = new OpenRouter({ apiKey });
+
+  const userPrompt = `EXISTING THEMES:\n${existingThemes.map(t => `- ${t.theme}: ${t.description}`).join('\n')}\n\nUNMATCHED TOPIC DESCRIPTIONS (${unmatched.length} tweets):\n${unmatched.map(u => `- "${u.topic_description}"`).join('\n')}`;
+
+  try {
+    const response = await client.chat.send({
+      model: 'anthropic/claude-sonnet-4.6',
+      maxTokens: 1024,
+      messages: [
+        { role: 'system' as const, content: THEME_ARCHITECT_SYSTEM },
+        { role: 'user' as const, content: userPrompt },
+      ],
+    });
+
+    const textContent = response.choices?.[0]?.message?.content;
+    if (!textContent || typeof textContent !== 'string') {
+      console.warn('[themes] Sonnet returned no content');
+      return { created: 0, ignored: 0 };
+    }
+
+    // Parse JSON (handle markdown fences)
+    let jsonStr = textContent.trim();
+    const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fenceMatch) jsonStr = fenceMatch[1].trim();
+
+    const parsed = JSON.parse(jsonStr) as {
+      new_themes: Array<{ theme: string; description: string; matched_descriptions: string[] }>;
+      ignored: string[];
+    };
+
+    let created = 0;
+    for (const nt of parsed.new_themes) {
+      const themeName = nt.theme.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+      if (themeName.length > 0) {
+        insertThemeRegistryEntry(themeName, nt.description, false);
+        created++;
+        console.log(`[themes] New theme discovered: "${themeName}" — ${nt.description}`);
+      }
+    }
+
+    // Clean up processed unmatched topics
+    deleteUnmatchedTopics(unmatched.map(u => u.id));
+
+    // Invalidate embedding cache so new themes are used in matching
+    invalidateThemeEmbeddingCache();
+
+    return { created, ignored: parsed.ignored?.length ?? 0 };
+  } catch (err) {
+    console.error('[themes] Sonnet theme discovery failed:', err);
+    return { created: 0, ignored: 0 };
+  }
 }

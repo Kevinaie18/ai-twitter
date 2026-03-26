@@ -13,6 +13,7 @@ import {
   getAuthorTrackRecord,
 } from './db.js';
 import type { ConsensusSnapshot } from './types.js';
+import { ASK_SYSTEM, THEME_SYNTHESIS_SYSTEM, WHO_SYNTHESIS_SYSTEM } from './prompts.js';
 import { getDailyCost } from './enrichment.js';
 
 // ─── Telegram Helpers ────────────────────────────────────────────────────────
@@ -168,7 +169,7 @@ async function askSonnet(
     model: 'anthropic/claude-sonnet-4.6',
     maxTokens: 1024,
     messages: [
-      { role: 'system' as const, content: `You are a financial intelligence assistant. Answer the user's question based ONLY on the provided tweets. Be concise and specific. Cite sources using @handle references. If the tweets don't contain enough information to answer, say so clearly.` },
+      { role: 'system' as const, content: ASK_SYSTEM },
       {
         role: 'user' as const,
         content: `Question: ${query}\n\nHere are the ${tweets.length} most relevant tweets from our database:\n\n${tweetContext}\n\nProvide a concise, specific answer with @handle citations.`,
@@ -182,6 +183,31 @@ async function askSonnet(
   }
 
   return String(textContent).trim();
+}
+
+async function synthesizeWithHaiku(
+  apiKey: string,
+  systemPrompt: string,
+  data: string,
+): Promise<string | null> {
+  if (!apiKey) return null;
+  try {
+    const client = createClient(apiKey);
+    const response = await client.chat.send({
+      model: 'anthropic/claude-haiku-4.5',
+      maxTokens: 512,
+      messages: [
+        { role: 'system' as const, content: systemPrompt },
+        { role: 'user' as const, content: data },
+      ],
+    });
+    const content = response.choices?.[0]?.message?.content;
+    if (!content) return null;
+    return String(content).trim();
+  } catch (err) {
+    console.warn('[bot] Haiku synthesis failed:', err);
+    return null;
+  }
 }
 
 function getTweetsByIds(tweetIds: string[]): any[] {
@@ -206,6 +232,16 @@ function getTweetsByIds(tweetIds: string[]): any[] {
  */
 export function createBot(token: string, env: Record<string, string>): Bot {
   const bot = new Bot(token);
+
+  // Register commands in Telegram's menu (the / autocomplete list)
+  bot.api.setMyCommands([
+    { command: 'ask', description: 'Search tweets and get AI answers' },
+    { command: 'consensus', description: 'View consensus for all themes' },
+    { command: 'theme', description: 'Deep dive on a theme' },
+    { command: 'who', description: 'Account summary and track record' },
+    { command: 'compare', description: 'Cross-list divergence' },
+    { command: 'status', description: 'System health and API costs' },
+  ]).catch(err => console.warn('[bot] Failed to set command menu:', err));
 
   const openrouterKey = env.OPENROUTER_API_KEY ?? '';
 
@@ -417,7 +453,20 @@ export function createBot(token: string, env: Record<string, string>): Bot {
         }
       }
 
-      await sendLongMessage(bot, ctx.chat.id.toString(), sections.join('\n'));
+      const rawData = sections.join('\n');
+
+      // AI synthesis: summarize the theme data into actionable intelligence
+      const synthesis = await synthesizeWithHaiku(
+        openrouterKey,
+        THEME_SYNTHESIS_SYSTEM,
+        rawData,
+      );
+
+      if (synthesis) {
+        await sendLongMessage(bot, ctx.chat.id.toString(), `${synthesis}\n\n---\n\n${rawData}`);
+      } else {
+        await sendLongMessage(bot, ctx.chat.id.toString(), rawData);
+      }
     } catch (err) {
       console.error('[bot /theme] Error:', err);
       await ctx.reply('Failed to retrieve theme data.');
@@ -514,7 +563,20 @@ export function createBot(token: string, env: Record<string, string>): Bot {
         }
       }
 
-      await sendLongMessage(bot, ctx.chat.id.toString(), lines.join('\n'));
+      const rawData = lines.join('\n');
+
+      // AI synthesis: characterize this account in 2-3 sentences
+      const synthesis = await synthesizeWithHaiku(
+        openrouterKey,
+        WHO_SYNTHESIS_SYSTEM,
+        rawData,
+      );
+
+      if (synthesis) {
+        await sendLongMessage(bot, ctx.chat.id.toString(), `${synthesis}\n\n---\n\n${rawData}`);
+      } else {
+        await sendLongMessage(bot, ctx.chat.id.toString(), rawData);
+      }
     } catch (err) {
       console.error('[bot /who] Error:', err);
       await ctx.reply('Failed to retrieve account data.');

@@ -12,6 +12,7 @@ import type {
   DigestSnapshot,
   DirectionalCall,
   AuthorTrackRecord,
+  ThemeRegistryEntry,
 } from './types.js';
 
 // ─── Module-level DB instance ────────────────────────────────────────────────
@@ -184,6 +185,26 @@ function createTables(): void {
       close REAL NOT NULL,
       PRIMARY KEY (ticker, date)
     );
+
+    -- ─── Theme registry (auto-discovered themes) ──────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS theme_registry (
+      theme TEXT PRIMARY KEY,
+      description TEXT NOT NULL DEFAULT '',
+      is_core INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      tweet_count INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- Unmatched topic descriptions waiting for Sonnet to name them
+    CREATE TABLE IF NOT EXISTS unmatched_topics (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      topic_description TEXT NOT NULL,
+      tweet_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_unmatched_created ON unmatched_topics(created_at);
 
     -- ─── Digest snapshots (delta tracking) ─────────────────────────────────────
 
@@ -682,6 +703,28 @@ export function insertPriceData(ticker: string, date: string, close: number): vo
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// ─── List Config Sync ────────────────────────────────────────────────────────
+
+export function syncListConfigs(config: Config): void {
+  const upsert = db.prepare(`
+    INSERT INTO list_configs (list_id, name, scrape_interval_min, active, added_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(list_id) DO UPDATE SET
+      name = excluded.name,
+      scrape_interval_min = excluded.scrape_interval_min,
+      active = excluded.active
+  `);
+
+  const tx = db.transaction(() => {
+    // Deactivate all lists first, then re-activate the ones in config
+    db.prepare(`UPDATE list_configs SET active = 0`).run();
+    for (const list of config.lists) {
+      upsert.run(list.id, list.name, list.scrape_interval_min || 120, list.active ? 1 : 0, new Date().toISOString());
+    }
+  });
+  tx();
+}
+
 // ─── Credibility Tag Sync ────────────────────────────────────────────────────
 
 export function syncCredibilityTags(config: Config): void {
@@ -797,6 +840,73 @@ export function getTopTrackRecords(listId: string, minCalls: number): AuthorTrac
     ...r,
     hit_rate: r.resolved_calls > 0 ? r.hits / r.resolved_calls : 0,
   }));
+}
+
+// ─── Theme Registry Operations ──────────────────────────────────────────────
+
+const CORE_THEMES: Array<{ theme: string; description: string }> = [
+  { theme: 'semis', description: 'Semiconductors, chip manufacturing, photonics, memory' },
+  { theme: 'geopolitics', description: 'International relations, military, sanctions, trade policy' },
+  { theme: 'macro', description: 'Macroeconomics, central banks, rates, inflation, employment' },
+  { theme: 'ai_infra', description: 'AI infrastructure, data centers, GPU compute, AI models' },
+  { theme: 'crypto', description: 'Cryptocurrency, blockchain, DeFi, stablecoins' },
+  { theme: 'options', description: 'Options market, volatility, derivatives, gamma, flow' },
+  { theme: 'energy', description: 'Oil, gas, renewables, energy policy, utilities' },
+  { theme: 'china_asia', description: 'China, Asia-Pacific markets, trade, regulatory' },
+  { theme: 'fixed_income', description: 'Bonds, treasuries, credit, yield curve, rates' },
+  { theme: 'earnings', description: 'Company earnings reports, guidance, results' },
+];
+
+export function seedThemeRegistry(): void {
+  const upsert = db.prepare(`
+    INSERT INTO theme_registry (theme, description, is_core, created_at, tweet_count)
+    VALUES (?, ?, 1, ?, 0)
+    ON CONFLICT(theme) DO UPDATE SET description = excluded.description, is_core = 1
+  `);
+  const now = new Date().toISOString();
+  const tx = db.transaction(() => {
+    for (const t of CORE_THEMES) {
+      upsert.run(t.theme, t.description, now);
+    }
+  });
+  tx();
+}
+
+export function getAllThemeDescriptions(): Array<{ theme: string; description: string }> {
+  return db.prepare(`SELECT theme, description FROM theme_registry ORDER BY tweet_count DESC`).all() as Array<{ theme: string; description: string }>;
+}
+
+export function getThemeByName(theme: string): ThemeRegistryEntry | null {
+  return db.prepare(`SELECT * FROM theme_registry WHERE theme = ?`).get(theme) as ThemeRegistryEntry | null;
+}
+
+export function insertThemeRegistryEntry(theme: string, description: string, isCore: boolean): void {
+  db.prepare(`
+    INSERT OR IGNORE INTO theme_registry (theme, description, is_core, created_at, tweet_count)
+    VALUES (?, ?, ?, ?, 0)
+  `).run(theme, description, isCore ? 1 : 0, new Date().toISOString());
+}
+
+export function incrementThemeCount(theme: string): void {
+  db.prepare(`UPDATE theme_registry SET tweet_count = tweet_count + 1 WHERE theme = ?`).run(theme);
+}
+
+export function insertUnmatchedTopic(topicDescription: string, tweetId: string): void {
+  db.prepare(`INSERT INTO unmatched_topics (topic_description, tweet_id, created_at) VALUES (?, ?, ?)`).run(topicDescription, tweetId, new Date().toISOString());
+}
+
+export function getRecentUnmatchedTopics(hours: number): Array<{ id: number; topic_description: string; tweet_id: string }> {
+  return db.prepare(`
+    SELECT id, topic_description, tweet_id FROM unmatched_topics
+    WHERE created_at >= datetime('now', '-' || ? || ' hours')
+    ORDER BY created_at DESC
+  `).all(hours) as Array<{ id: number; topic_description: string; tweet_id: string }>;
+}
+
+export function deleteUnmatchedTopics(ids: number[]): void {
+  if (ids.length === 0) return;
+  const placeholders = ids.map(() => '?').join(',');
+  db.prepare(`DELETE FROM unmatched_topics WHERE id IN (${placeholders})`).run(...ids);
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

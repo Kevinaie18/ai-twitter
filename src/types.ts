@@ -41,6 +41,7 @@ export interface Config {
     credibility_tags?: Record<string, CredibilityTag>;
     default_tag?: CredibilityTag; // default 'unverified'
   };
+  theme_tickers?: Record<string, string[]>;  // custom theme → ticker mapping for backtesting
   track_record?: {
     enabled?: boolean;            // default false
     resolution_days?: number;     // default 5
@@ -141,6 +142,16 @@ export interface DigestResult {
   tweet_count: number;
   generated_at: string;
   delta?: DigestDelta;
+}
+
+// ─── Theme Registry ─────────────────────────────────────────────────────────
+
+export interface ThemeRegistryEntry {
+  theme: string;              // canonical snake_case name
+  description: string;        // 1-sentence definition
+  is_core: boolean;           // true = hardcoded core theme, false = LLM-discovered
+  created_at: string;
+  tweet_count: number;        // running count for frequency tracking
 }
 
 // ─── Digest Snapshots (for delta tracking) ─────────────────────────────────
