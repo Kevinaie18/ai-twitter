@@ -18,10 +18,15 @@ import type {
 // ─── Module-level DB instance ────────────────────────────────────────────────
 
 let db: Database.Database;
+let sqliteVecAvailable = false;
 
 export function getDb(): Database.Database {
   if (!db) throw new Error('Database not initialized. Call initDb() first.');
   return db;
+}
+
+export function isSqliteVecAvailable(): boolean {
+  return sqliteVecAvailable;
 }
 
 // ─── Initialization ──────────────────────────────────────────────────────────
@@ -46,6 +51,7 @@ export function initDb(dbPath: string): Database.Database {
       try {
         db.loadExtension(path.join(extDir, ext));
         loaded = true;
+        sqliteVecAvailable = true;
         break;
       } catch {
         // try next
@@ -58,9 +64,11 @@ export function initDb(dbPath: string): Database.Database {
         if (typeof sqliteVec.loadable === 'function') {
           db.loadExtension(sqliteVec.loadable());
           loaded = true;
+          sqliteVecAvailable = true;
         } else if (typeof sqliteVec.load === 'function') {
           sqliteVec.load(db);
           loaded = true;
+          sqliteVecAvailable = true;
         }
       } catch {
         console.warn('sqlite-vec extension not loaded — vector search unavailable');
@@ -433,6 +441,7 @@ export function markEnrichmentFailed(tweetId: string): void {
 // ─── Embedding / Vector Operations ───────────────────────────────────────────
 
 export function insertEmbedding(tweetId: string, embedding: number[]): void {
+  if (!sqliteVecAvailable) return; // Skip silently — checked once at startup
   const float32 = new Float32Array(embedding);
   db.prepare(`
     INSERT INTO tweet_embeddings (tweet_id, embedding)
@@ -441,6 +450,7 @@ export function insertEmbedding(tweetId: string, embedding: number[]): void {
 }
 
 export function searchSimilar(embedding: number[], limit: number): Array<{ tweet_id: string; distance: number }> {
+  if (!sqliteVecAvailable) return []; // Graceful fallback — FTS5 will be used instead
   const float32 = new Float32Array(embedding);
   const rows = db.prepare(`
     SELECT tweet_id, distance
