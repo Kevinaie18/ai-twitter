@@ -4,6 +4,7 @@ import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { basicAuth } from 'hono/basic-auth';
 import * as db from '../db.js';
+import { getDb } from '../db.js';
 
 export function createDashboard(port: number, env: Record<string, string>, config?: { defaultListId?: string }) {
   const app = new Hono();
@@ -68,11 +69,12 @@ export function createDashboard(port: number, env: Record<string, string>, confi
     return c.json({ accounts });
   });
 
-  // GET /api/account/:id — account detail
+  // GET /api/account/:id — account detail with credibility + track record
   app.get('/api/account/:id', (c) => {
     const authorId = c.req.param('id');
     const stats = db.getAccountStats(authorId);
-    return c.json({ stats });
+    const trackRecord = db.getAuthorTrackRecord(authorId);
+    return c.json({ stats, track_record: trackRecord });
   });
 
   // GET /api/search — search tweets via FTS5
@@ -90,6 +92,56 @@ export function createDashboard(port: number, env: Record<string, string>, confi
   app.get('/api/health', (c) => {
     const health = db.getScrapeHealth();
     return c.json({ health, timestamp: new Date().toISOString() });
+  });
+
+  // GET /api/track-records — top track records with hit rates
+  app.get('/api/track-records', (c) => {
+    const listId = c.req.query('list_id') || defaultListId;
+    const minCalls = parseInt(c.req.query('min_calls') || '5');
+    const records = db.getTopTrackRecords(listId, minCalls);
+    return c.json({ records });
+  });
+
+  // GET /api/track-record/:authorId — single author track record
+  app.get('/api/track-record/:authorId', (c) => {
+    const authorId = c.req.param('authorId');
+    const record = db.getAuthorTrackRecord(authorId);
+    return c.json({ record });
+  });
+
+  // GET /api/theme-registry — all themes (core + discovered) with tweet counts
+  app.get('/api/theme-registry', (c) => {
+    const themes = db.getAllThemeDescriptions();
+    const database = getDb();
+    const registry = database.prepare(`
+      SELECT theme, description, is_core, created_at, tweet_count
+      FROM theme_registry ORDER BY tweet_count DESC
+    `).all();
+    return c.json({ themes: registry });
+  });
+
+  // GET /api/digests — recent digest snapshots with delta data
+  app.get('/api/digests', (c) => {
+    const listId = c.req.query('list_id') || defaultListId;
+    const limit = parseInt(c.req.query('limit') || '10');
+    const database = getDb();
+    const digests = database.prepare(`
+      SELECT id, list_id, generated_at, digest_type, tweet_count,
+             themes_json, consensus_json, alerts_json, emerging_json
+      FROM digest_snapshots
+      WHERE list_id = ?
+      ORDER BY generated_at DESC
+      LIMIT ?
+    `).all(listId, Math.min(limit, 50));
+    return c.json({ digests });
+  });
+
+  // GET /api/digest/:id — single digest with full text
+  app.get('/api/digest/:id', (c) => {
+    const digestId = c.req.param('id');
+    const database = getDb();
+    const digest = database.prepare(`SELECT * FROM digest_snapshots WHERE id = ?`).get(digestId);
+    return c.json({ digest: digest ?? null });
   });
 
   // ─── SPA: serve index.html for all non-API routes ────────────────────────────
