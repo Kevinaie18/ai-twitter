@@ -426,25 +426,30 @@ async function callOpus(
   const sections: string[] = [];
 
   // Header context
+  const sinceDate = new Date(since);
+  const sinceHuman = sinceDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+    ' ' + sinceDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) + ' UTC';
   sections.push(`You are generating a financial intelligence digest for the Twitter/X list "${listName}".`);
-  sections.push(`Time window: since ${since}`);
-  sections.push(`Total tweets analyzed: ${tweetCount}`);
+  sections.push(`Time window: since ${sinceHuman}`);
+  sections.push(`Total tweets in window: ${tweetCount}`);
   sections.push('');
 
-  // Delta section (what changed since last digest)
+  // Delta section (what changed since last digest) — suppress entirely if no delta data
   if (delta && (delta.new_themes.length > 0 || delta.dropped_themes.length > 0 || delta.consensus_shifts.length > 0)) {
     sections.push('=== WHAT CHANGED SINCE LAST DIGEST ===');
-    if (delta.new_themes.length > 0) {
-      sections.push(`New themes: ${delta.new_themes.join(', ')}`);
-    }
-    if (delta.dropped_themes.length > 0) {
-      sections.push(`Dropped themes: ${delta.dropped_themes.join(', ')}`);
-    }
+    // Consensus shifts first (most valuable signal)
     for (const shift of delta.consensus_shifts) {
       sections.push(`Consensus shift: ${shift.theme} — ${shift.old_direction} ${shift.old_pct.toFixed(0)}% → ${shift.new_direction} ${shift.new_pct.toFixed(0)}%`);
     }
+    if (delta.new_themes.length > 0) {
+      sections.push(`New themes entering conversation: ${delta.new_themes.join(', ')}`);
+    }
+    if (delta.dropped_themes.length > 0) {
+      sections.push(`Themes dropped off: ${delta.dropped_themes.join(', ')}`);
+    }
     sections.push('');
   }
+  // Note: if no delta, we intentionally omit the section entirely (not "no comparison available")
 
   // Track records
   if (trackRecords && trackRecords.length > 0) {
@@ -468,9 +473,9 @@ async function callOpus(
     sections.push('');
   }
 
-  // Theme clusters with representative tweets
+  // Theme clusters with representative tweets (only include themes that pass signal floor)
   sections.push('=== THEME CLUSTERS (ranked by importance) ===');
-  for (const cluster of clusters.slice(0, 8)) {
+  for (const cluster of clusters) {
     sections.push(`\n--- ${cluster.theme.toUpperCase()} ---`);
     sections.push(
       `Accounts: ${cluster.uniqueAccounts} | Engagement: ${cluster.totalEngagement} | Novelty: ${cluster.avgNovelty.toFixed(2)}`,

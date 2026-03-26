@@ -121,7 +121,7 @@ async function callHaiku(
 
   const response = await client.chat.send({
     model: 'anthropic/claude-haiku-4.5',
-    maxTokens: 4096,
+    maxTokens: 8192,
     messages: [
       { role: 'system' as const, content: ENRICHMENT_SYSTEM },
       {
@@ -413,13 +413,16 @@ export async function enrichBatch(
 
       if (
         !haikuData.sentiment ||
-        !VALID_SENTIMENTS.has(haikuData.sentiment) ||
-        !haikuData.themes ||
-        haikuData.themes.length === 0
+        !VALID_SENTIMENTS.has(haikuData.sentiment)
       ) {
         throw new Error(
-          `Invalid Haiku data for tweet ${tweet.id}: missing sentiment or themes`,
+          `Invalid Haiku data for tweet ${tweet.id}: missing or invalid sentiment`,
         );
+      }
+
+      // Ensure themes is an array (empty is valid — non-financial tweets exist)
+      if (!haikuData.themes) {
+        haikuData.themes = [];
       }
 
       // ── Theme Resolution: Haiku themes + embedding-based matching ──
