@@ -107,20 +107,38 @@ async function sendLongMessage(bot: Bot, chatId: string, text: string, parseMode
 // ─── Push Functions ──────────────────────────────────────────────────────────
 
 /**
+ * Convert Opus markdown to Telegram HTML.
+ * Handles: **bold** → <b>bold</b>, escapes HTML entities.
+ */
+function markdownToTelegramHtml(text: string): string {
+  // Escape HTML entities first
+  let html = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  // Convert **bold** to <b>bold</b>
+  html = html.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  // Convert *italic* to <i>italic</i> (single asterisks, not already converted)
+  html = html.replace(/\*(.+?)\*/g, '<i>$1</i>');
+  return html;
+}
+
+/**
  * Send a formatted digest message to a chat. Supports split format (TL;DR + deep dive as reply).
+ * Converts markdown to Telegram HTML for proper rendering.
  */
 export async function sendDigest(bot: Bot, chatId: string, digest: string | import('./types.js').DigestResult): Promise<void> {
   if (typeof digest === 'string') {
-    await sendLongMessage(bot, chatId, digest);
+    await sendLongMessage(bot, chatId, markdownToTelegramHtml(digest), 'HTML');
     return;
   }
 
   if (digest.tldr) {
     // Send TL;DR first, then full digest as threaded reply
-    const tldrMsg = await bot.api.sendMessage(chatId, digest.tldr);
-    await sendLongMessage(bot, chatId, digest.text, undefined, tldrMsg.message_id);
+    const tldrMsg = await bot.api.sendMessage(chatId, markdownToTelegramHtml(digest.tldr), { parse_mode: 'HTML' });
+    await sendLongMessage(bot, chatId, markdownToTelegramHtml(digest.text), 'HTML', tldrMsg.message_id);
   } else {
-    await sendLongMessage(bot, chatId, digest.text);
+    await sendLongMessage(bot, chatId, markdownToTelegramHtml(digest.text), 'HTML');
   }
 }
 

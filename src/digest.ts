@@ -57,7 +57,12 @@ export async function generateDigest(
   const now = new Date().toISOString();
 
   // Step 1: Get all tweets with enrichments for the window
-  const tweets = getDigestTweets(listId, since);
+  // Cap at 500 most recent to prevent cost blowout on large windows
+  let tweets = getDigestTweets(listId, since);
+  if (tweets.length > 500) {
+    console.warn(`[digest] Window returned ${tweets.length} tweets — capping to 500 most recent`);
+    tweets = tweets.slice(0, 500); // Already sorted by created_at DESC
+  }
 
   if (tweets.length === 0) {
     return {
@@ -99,12 +104,17 @@ export async function generateDigest(
     c.uniqueAccounts >= minAccounts && c.totalEngagement >= minEngagement
   );
 
-  // Step 6: Rank themes — unique accounts > total engagement > novelty
+  // Step 6: Rank themes — unique accounts > signal density > novelty
+  // Signal density = directional accounts / total accounts (how aligned are they)
+  // This deprioritizes themes dominated by aggregator noise (high engagement, low signal)
   themeClusters.sort((a, b) => {
     if (b.uniqueAccounts !== a.uniqueAccounts)
       return b.uniqueAccounts - a.uniqueAccounts;
-    if (b.totalEngagement !== a.totalEngagement)
-      return b.totalEngagement - a.totalEngagement;
+    // Tiebreaker: directional signal density (% of accounts that are bullish or bearish)
+    const aSignal = a.consensus ? (a.consensus.bullish_count + a.consensus.bearish_count) / Math.max(1, a.consensus.total_accounts) : 0;
+    const bSignal = b.consensus ? (b.consensus.bullish_count + b.consensus.bearish_count) / Math.max(1, b.consensus.total_accounts) : 0;
+    if (Math.abs(bSignal - aSignal) > 0.1)
+      return bSignal - aSignal;
     return b.avgNovelty - a.avgNovelty;
   });
 
@@ -426,25 +436,30 @@ async function callOpus(
   const sections: string[] = [];
 
   // Header context
+  const sinceDate = new Date(since);
+  const sinceHuman = sinceDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+    ' ' + sinceDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) + ' UTC';
   sections.push(`You are generating a financial intelligence digest for the Twitter/X list "${listName}".`);
-  sections.push(`Time window: since ${since}`);
-  sections.push(`Total tweets analyzed: ${tweetCount}`);
+  sections.push(`Time window: since ${sinceHuman}`);
+  sections.push(`Total tweets in window: ${tweetCount}`);
   sections.push('');
 
-  // Delta section (what changed since last digest)
+  // Delta section (what changed since last digest) — suppress entirely if no delta data
   if (delta && (delta.new_themes.length > 0 || delta.dropped_themes.length > 0 || delta.consensus_shifts.length > 0)) {
     sections.push('=== WHAT CHANGED SINCE LAST DIGEST ===');
-    if (delta.new_themes.length > 0) {
-      sections.push(`New themes: ${delta.new_themes.join(', ')}`);
-    }
-    if (delta.dropped_themes.length > 0) {
-      sections.push(`Dropped themes: ${delta.dropped_themes.join(', ')}`);
-    }
+    // Consensus shifts first (most valuable signal)
     for (const shift of delta.consensus_shifts) {
       sections.push(`Consensus shift: ${shift.theme} — ${shift.old_direction} ${shift.old_pct.toFixed(0)}% → ${shift.new_direction} ${shift.new_pct.toFixed(0)}%`);
     }
+    if (delta.new_themes.length > 0) {
+      sections.push(`New themes entering conversation: ${delta.new_themes.join(', ')}`);
+    }
+    if (delta.dropped_themes.length > 0) {
+      sections.push(`Themes dropped off: ${delta.dropped_themes.join(', ')}`);
+    }
     sections.push('');
   }
+  // Note: if no delta, we intentionally omit the section entirely (not "no comparison available")
 
   // Track records
   if (trackRecords && trackRecords.length > 0) {
@@ -468,9 +483,9 @@ async function callOpus(
     sections.push('');
   }
 
-  // Theme clusters with representative tweets
+  // Theme clusters with representative tweets (only include themes that pass signal floor)
   sections.push('=== THEME CLUSTERS (ranked by importance) ===');
-  for (const cluster of clusters.slice(0, 8)) {
+  for (const cluster of clusters) {
     sections.push(`\n--- ${cluster.theme.toUpperCase()} ---`);
     sections.push(
       `Accounts: ${cluster.uniqueAccounts} | Engagement: ${cluster.totalEngagement} | Novelty: ${cluster.avgNovelty.toFixed(2)}`,

@@ -156,7 +156,13 @@ RULES:
 - Use @handles for attribution — every claim should trace to a source.
 - Credibility weighting: [analyst] ≈ [institutional] ≈ [journalist] — these are the core of this curated list and should be treated as high-signal. [aggregator] and [unverified] are secondary — flag them explicitly if they're the sole source for a claim.
 - If an author has a hit rate, include it on first mention. It's a decision-relevant signal.
-- When multiple analysts agree, their combined signal is strong — synthesize the thesis, don't just list names.`;
+- When multiple analysts agree, their combined signal is strong — synthesize the thesis, don't just list names.
+- NEVER include themes you are skipping. Do not write "Skipping" or "no investable signal" — just omit them entirely.
+- Do not use markdown bold (**text**). Use CAPS, emoji, or plain text for emphasis — this renders in Telegram.
+- Allocate words proportional to signal density: a theme with 3 specific trade ideas gets more words than one with only political noise.
+- DEDUPLICATION: Each signal appears in ONE section only. If a dissent/debate appears in the consensus alert, do NOT repeat it in the theme section or emerging. Cross-reference briefly instead: "(see Consensus Alert above)".
+- RT ATTRIBUTION: When a tweet starts with "RT @original_source" or an [aggregator] surfaces reporting from a named source (FT, Bloomberg, Reuters), attribute to the original source: "Per FT (via @aggregator)" — not "@aggregator highlighted FT reporting." The source is the journalist/outlet, the aggregator is the relay.
+- EMERGING SIGNALS: Only cite what is explicitly stated in the tweets. Never write "may be brewing", "suggests X could happen", or "clustering indicates." If no catalyst is identified, say: "appearing in conversation for the first time — context unclear from available tweets." Do not fabricate narrative.`;
 }
 
 // ─── Digest: TL;DR Compression (Haiku) ──────────────────────────────────────
