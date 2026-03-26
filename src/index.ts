@@ -1,7 +1,7 @@
 import { schedule } from 'node-cron';
 import { Bot } from 'grammy';
 import { loadConfig, loadEnv, getRequiredEnv } from './config.js';
-import { initDb, getUnenrichedTweets, getLastScrapedTweetId, getScrapeHealth, syncCredibilityTags, syncListConfigs, seedThemeRegistry } from './db.js';
+import { initDb, getUnenrichedTweets, getLastScrapedTweetId, getScrapeHealth, syncCredibilityTags, syncListConfigs, seedThemeRegistry, getLastDigestSnapshot } from './db.js';
 import { discoverQueryHash, scrapeList } from './scraper.js';
 import { enrichBatch, discoverNewThemes } from './enrichment.js';
 import { generateDigest } from './digest.js';
@@ -36,7 +36,8 @@ async function main() {
   // Init Telegram bot
   const bot = createBot(
     getRequiredEnv(env, 'TELEGRAM_BOT_TOKEN'),
-    env
+    env,
+    config,
   );
   const chatId = getRequiredEnv(env, 'TELEGRAM_CHAT_ID');
 
@@ -110,7 +111,7 @@ async function main() {
       for (const list of config.lists.filter(l => l.active)) {
         try {
           console.log(`[digest] Generating for "${list.name}"...`);
-          const result = await generateDigest(list.id, list.name, since, apiKey, config, digestType);
+          const result = await generateDigest(list.id, list.name, since, apiKey, config, digestType, 'scheduled');
           await sendDigest(bot, chatId, result);
           console.log(`[digest] Sent for "${list.name}" (${result.tweet_count} tweets, delta: ${result.delta ? 'yes' : 'no'})`);
         } catch (err) {
@@ -121,6 +122,30 @@ async function main() {
     });
   }
   console.log(`[init] Digests scheduled at ${morningHour}:00 and ${eveningHour}:00 UTC`);
+
+  // ─── Initial digest bootstrap (first boot only) ─────────
+  // If no digest snapshot exists for any active list, run a full-corpus initial
+  // digest to establish baselines for WHAT CHANGED delta tracking.
+  setTimeout(async () => {
+    try {
+      const freshEnv = loadEnv();
+      const apiKey = freshEnv.OPENROUTER_API_KEY;
+      if (!apiKey) return;
+
+      for (const list of config.lists.filter(l => l.active)) {
+        const lastSnapshot = getLastDigestSnapshot(list.id);
+        if (!lastSnapshot) {
+          console.log(`[digest] No prior snapshot for "${list.name}" — running initial baseline digest...`);
+          const since = new Date(0).toISOString(); // All tweets ever
+          const result = await generateDigest(list.id, list.name, since, apiKey, config, 'manual', 'initial');
+          console.log(`[digest] Initial baseline for "${list.name}": ${result.tweet_count} tweets, ${result.themes_covered.length} themes`);
+          // Don't send to Telegram — this is a background bootstrap, not a user-facing digest
+        }
+      }
+    } catch (err) {
+      console.error('[digest] Initial baseline failed (non-fatal):', err);
+    }
+  }, 30_000); // Wait 30s for enrichment to have some data
 
   // ─── Track record resolution cron (daily at midnight UTC) ─────────
   if (config.track_record?.enabled) {
