@@ -32,11 +32,14 @@ Investment professionals, fund managers, and serious market participants who fol
 ## Features
 
 ### Intelligence Layer
-- **Delta-first digests** — "What changed since last time" is the first section. Consensus shifts, new themes, dropped themes.
-- **Analyst consensus** — One vote per account per window. Alerts when ≥80% align. Historical context and price backtesting.
+- **Delta-first digests** — "What changed since last time" leads with consensus shifts (most actionable), then new/dropped themes. Suppressed on first run.
+- **Analyst consensus** — One vote per account per window. Votes are windowed (not all-time). Alerts when ≥80% align. Historical context and price backtesting.
 - **Source credibility tags** — Tag accounts as `journalist`, `institutional`, `analyst`, `aggregator`, `unverified` in config. Digest prioritizes high-credibility sources.
+- **RT attribution** — When an aggregator surfaces reporting from FT/Bloomberg/Reuters, the digest attributes to the original source: "Per FT (via @aggregator)".
+- **Signal deduplication** — Each signal appears in one digest section only. Cross-references instead of repetition.
 - **Track record engine** — Logs directional calls (bullish/bearish + ticker), resolves against price data, computes per-account hit rates. Opt-in.
 - **Signal noise floor** — Themes below configurable thresholds (min accounts, min engagement) are filtered from the digest.
+- **Signal density ranking** — Themes ranked by unique analysts × directional signal density, not raw engagement. Prevents aggregator noise from dominating.
 
 ### Auto-Discovering Theme Taxonomy
 Themes are not hardcoded. The system uses a 3-tier architecture:
@@ -62,6 +65,8 @@ Commands `/theme` and `/who` include AI synthesis (Haiku) above the raw data —
 Configurable as `single` (one message) or `split` (recommended):
 - **TL;DR** (~150 words) — sent as the primary message, scannable on mobile
 - **Deep dive** — full digest sent as a threaded reply
+- Markdown is auto-converted to Telegram HTML (bold, italic render properly)
+- Digest window capped at 500 most recent tweets to prevent cost blowout
 
 ### Centralized Prompts
 All 7 AI prompts live in `src/prompts.ts` — edit to iterate on output quality without touching logic:
@@ -293,13 +298,19 @@ config.yaml         List configuration + all feature settings
 
 | Problem | Solution |
 |---------|----------|
-| "Scraper auth failed" alert | Refresh Twitter cookies in `.env` |
+| "Scraper auth failed" alert | Refresh Twitter cookies in `.env` (hot-reloaded, no restart) |
 | No tweets appearing | Check `/status`. Verify list ID is correct and list is public |
 | Commands not showing in Telegram | Restart the bot — `setMyCommands` runs on startup |
 | Dashboard returns empty | Verify `config.yaml` has the correct list ID |
 | High API costs | Lower `max_tweets_per_scrape` or reduce scrape frequency |
 | Missing consensus alerts | Need 2+ weeks of data. Check `/consensus` |
 | New theme not appearing | Themes auto-discover every 6h. Check `theme_registry` table |
+| Digest shows 14K+ tweets | Window query returned full DB — cap is now 500. Check `since` param |
+| Enrichment "missing themes" errors | Fixed — empty themes allowed for non-financial tweets |
+| Haiku output truncated | Fixed — maxTokens raised from 4096 to 8192 |
+| `**bold**` shows as asterisks | Fixed — digest now converts markdown to Telegram HTML |
+| better-sqlite3 DLOPEN failure | Run service with same Node version used for `npm install` |
+| WHAT CHANGED empty on first run | Normal — needs 2+ digests to compute delta |
 
 ## License
 
