@@ -104,12 +104,17 @@ export async function generateDigest(
     c.uniqueAccounts >= minAccounts && c.totalEngagement >= minEngagement
   );
 
-  // Step 6: Rank themes — unique accounts > total engagement > novelty
+  // Step 6: Rank themes — unique accounts > signal density > novelty
+  // Signal density = directional accounts / total accounts (how aligned are they)
+  // This deprioritizes themes dominated by aggregator noise (high engagement, low signal)
   themeClusters.sort((a, b) => {
     if (b.uniqueAccounts !== a.uniqueAccounts)
       return b.uniqueAccounts - a.uniqueAccounts;
-    if (b.totalEngagement !== a.totalEngagement)
-      return b.totalEngagement - a.totalEngagement;
+    // Tiebreaker: directional signal density (% of accounts that are bullish or bearish)
+    const aSignal = a.consensus ? (a.consensus.bullish_count + a.consensus.bearish_count) / Math.max(1, a.consensus.total_accounts) : 0;
+    const bSignal = b.consensus ? (b.consensus.bullish_count + b.consensus.bearish_count) / Math.max(1, b.consensus.total_accounts) : 0;
+    if (Math.abs(bSignal - aSignal) > 0.1)
+      return bSignal - aSignal;
     return b.avgNovelty - a.avgNovelty;
   });
 
