@@ -156,7 +156,10 @@ RULES:
 - Use @handles for attribution — every claim should trace to a source.
 - Credibility weighting: [analyst] ≈ [institutional] ≈ [journalist] — these are the core of this curated list and should be treated as high-signal. [aggregator] and [unverified] are secondary — flag them explicitly if they're the sole source for a claim.
 - If an author has a hit rate, include it on first mention. It's a decision-relevant signal.
-- When multiple analysts agree, their combined signal is strong — synthesize the thesis, don't just list names.`;
+- When multiple analysts agree, their combined signal is strong — synthesize the thesis, don't just list names.
+- NEVER include themes you are skipping. Do not write "Skipping" or "no investable signal" — just omit them entirely.
+- Do not use markdown bold (**text**). Use CAPS, emoji, or plain text for emphasis — this renders in Telegram.
+- Allocate words proportional to signal density: a theme with 3 specific trade ideas gets more words than one with only political noise.`;
 }
 
 // ─── Digest: TL;DR Compression (Haiku) ──────────────────────────────────────
