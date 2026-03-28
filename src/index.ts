@@ -1,8 +1,8 @@
 import { schedule } from 'node-cron';
 import { Bot } from 'grammy';
 import { loadConfig, loadEnv, getRequiredEnv } from './config.js';
-import { initDb, getUnenrichedTweets, getLastScrapedTweetId, getScrapeHealth, syncCredibilityTags, syncListConfigs, seedThemeRegistry, getLastDigestSnapshot } from './db.js';
-import { discoverQueryHash, scrapeList } from './scraper.js';
+import { initDb, getLastScrapedTweetId, syncCredibilityTags, syncListConfigs, seedThemeRegistry, getLastDigestSnapshot } from './db.js';
+import { scrapeList } from './scraper.js';
 import { enrichBatch, discoverNewThemes } from './enrichment.js';
 import { generateDigest } from './digest.js';
 import { createBot, sendDigest, sendAlert } from './bot.js';
@@ -50,67 +50,66 @@ async function main() {
   createDashboard(dashboardPort, env, { defaultListId });
   console.log(`[init] Dashboard at http://localhost:${dashboardPort}`);
 
-  // ─── Scrape cron (every 2h by default) ─────────
+  // ─── Startup scrape (cold boot data freshness) ─────────
   for (const list of config.lists.filter(l => l.active)) {
-    const interval = list.scrape_interval_min || 120;
-    // Run immediately on startup, then on schedule
     runScrape(list.id, list.name, env, config, chatId, bot);
-
-    schedule(`*/${interval} * * * *`, () => {
-      runScrape(list.id, list.name, env, config, chatId, bot);
-    });
-    console.log(`[init] Scrape scheduled every ${interval}min for list "${list.name}"`);
   }
+  console.log('[init] Startup scrape triggered for all active lists');
 
-  // ─── Enrichment cron (every 5 min) ─────────
-  schedule('*/5 * * * *', async () => {
-    try {
-      const freshEnv = loadEnv(); // Hot-reload API keys
-      const result = await enrichBatch(
-        getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY'),
-        config,
-      );
-      if (result.processed > 0) {
-        console.log(`[enrich] Processed ${result.processed}, failed ${result.failed}`);
-      }
-    } catch (err) {
-      console.error('[enrich] Error:', err);
-    }
-  });
-  console.log('[init] Enrichment scheduled every 5min');
-
-  // ─── Theme discovery cron (every 6 hours) ─────────
-  schedule('0 */6 * * *', async () => {
-    try {
-      const freshEnv = loadEnv();
-      const result = await discoverNewThemes(
-        getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY'),
-      );
-      if (result.created > 0) {
-        console.log(`[themes] Discovered ${result.created} new themes, ignored ${result.ignored} orphans`);
-      }
-    } catch (err) {
-      console.error('[themes] Discovery error:', err);
-    }
-  });
-  console.log('[init] Theme discovery scheduled every 6h');
-
-  // ─── Digest cron (morning + evening) ─────────
+  // ─── Pre-digest pipeline (scrape + enrich + themes) ─────────
+  // Runs twice daily, ~1h before each digest, instead of continuous crons.
+  // For a small list this completes in <1 minute.
+  const offsetMin = config.digest?.pre_digest_offset_min ?? 60;
   const morningHour = config.digest?.morning_hour ?? 7;
   const eveningHour = config.digest?.evening_hour ?? 18;
+
+  function computePipelineCron(digestHour: number, offsetMinutes: number): string {
+    const totalMinutes = digestHour * 60 - offsetMinutes;
+    const adjusted = ((totalMinutes % 1440) + 1440) % 1440; // handle wrap-around
+    return `${adjusted % 60} ${Math.floor(adjusted / 60)} * * *`;
+  }
+
+  for (const [label, digestHour] of [['morning', morningHour], ['evening', eveningHour]] as const) {
+    const cron = computePipelineCron(digestHour as number, offsetMin);
+    schedule(cron, async () => {
+      try {
+        await runPreDigestPipeline(label, config, chatId, bot);
+      } catch (err) {
+        console.error(`[pipeline] ${label} pipeline failed:`, err);
+        await sendAlert(bot, chatId, `⚠️ ${label} pre-digest pipeline failed: ${err}`);
+      }
+    });
+  }
+  console.log(`[init] Pre-digest pipeline at ${computePipelineCron(morningHour, offsetMin)} and ${computePipelineCron(eveningHour, offsetMin)} UTC`);
+
+  // ─── Digest cron (morning + evening) ─────────
 
   for (const hour of [morningHour, eveningHour]) {
     const digestType = hour === morningHour ? 'morning' as const : 'evening' as const;
     schedule(`0 ${hour} * * *`, async () => {
       const freshEnv = loadEnv();
       const apiKey = getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY');
-      const since = hour === morningHour
-        ? new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString() // last 12h
-        : new Date(Date.now() - 11 * 60 * 60 * 1000).toISOString(); // since morning
 
+      // Each digest covers the window since the LAST digest was generated.
+      // Fallback: morning looks back 12h, evening looks back to morning hour.
+      // This prevents overlapping windows that re-analyze the same tweets.
+      let since: string;
       for (const list of config.lists.filter(l => l.active)) {
+        const lastSnapshot = getLastDigestSnapshot(list.id);
+        if (lastSnapshot) {
+          // Start from where the last digest left off
+          since = lastSnapshot.generated_at;
+        } else if (hour === morningHour) {
+          since = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
+        } else {
+          // Evening: start from morning hour today
+          const today = new Date();
+          today.setUTCHours(morningHour, 0, 0, 0);
+          since = today.toISOString();
+        }
+
         try {
-          console.log(`[digest] Generating for "${list.name}"...`);
+          console.log(`[digest] Generating ${digestType} for "${list.name}" (since ${since})...`);
           const result = await generateDigest(list.id, list.name, since, apiKey, config, digestType, 'scheduled');
           await sendDigest(bot, chatId, result);
           console.log(`[digest] Sent for "${list.name}" (${result.tweet_count} tweets, delta: ${result.delta ? 'yes' : 'no'})`);
@@ -211,6 +210,71 @@ async function runScrape(
       console.log(`[scrape] ${listName}: rate limited, will retry next cycle`);
     }
   }
+}
+
+// ─── Pre-Digest Pipeline ────────────────────────────────────────────────────
+
+async function runPreDigestPipeline(
+  label: string,
+  config: Config,
+  chatId: string,
+  bot: Bot,
+): Promise<void> {
+  const startTime = Date.now();
+  console.log(`[pipeline] ${label} pre-digest pipeline starting...`);
+
+  // Phase 1: Scrape all active lists
+  const freshEnv = loadEnv();
+  for (const list of config.lists.filter(l => l.active)) {
+    await runScrape(list.id, list.name, freshEnv, config, chatId, bot);
+  }
+  console.log(`[pipeline] ${label} scrape complete (${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
+
+  // Phase 2: Drain enrichment queue
+  let apiKey: string;
+  try {
+    apiKey = getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY');
+  } catch {
+    console.error(`[pipeline] ${label} OPENROUTER_API_KEY missing — skipping enrichment & themes`);
+    return;
+  }
+
+  let totalProcessed = 0;
+  let totalFailed = 0;
+  let batchCount = 0;
+  const MAX_BATCHES = 100; // Safety: 100 × 25 = 2500 tweets max
+
+  while (batchCount < MAX_BATCHES) {
+    try {
+      const result = await enrichBatch(apiKey, config);
+      totalProcessed += result.processed;
+      totalFailed += result.failed;
+      batchCount++;
+      if (result.processed === 0 && result.failed === 0) break;
+    } catch (err) {
+      console.error(`[pipeline] ${label} enrichment batch ${batchCount + 1} failed:`, err);
+      batchCount++;
+      // Continue draining — one failed batch shouldn't stop the rest
+      // But if 3 consecutive batches fail, the API is probably down
+      if (batchCount >= 3 && totalProcessed === 0) {
+        console.error(`[pipeline] ${label} 3 consecutive enrichment failures — aborting enrichment`);
+        break;
+      }
+    }
+  }
+  console.log(`[pipeline] ${label} enrichment complete: ${totalProcessed} processed, ${totalFailed} failed, ${batchCount} batches (${((Date.now() - startTime) / 1000).toFixed(1)}s)`);
+
+  // Phase 3: Theme discovery
+  try {
+    const themeResult = await discoverNewThemes(apiKey);
+    if (themeResult.created > 0) {
+      console.log(`[pipeline] ${label} discovered ${themeResult.created} new themes`);
+    }
+  } catch (err) {
+    console.error(`[pipeline] ${label} theme discovery error (non-fatal):`, err);
+  }
+
+  console.log(`[pipeline] ${label} complete in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 }
 
 main().catch(err => {
