@@ -1,6 +1,7 @@
-import { OpenRouter } from '@openrouter/sdk';
 import type { Tweet, Entity, Theme, Config } from './types.js';
 import { ENRICHMENT_SYSTEM, THEME_ARCHITECT_SYSTEM } from './prompts.js';
+import { getOpenRouterClient } from './client.js';
+import { sanitizeError } from './utils.js';
 import {
   getDb,
   getUnenrichedTweets,
@@ -15,6 +16,8 @@ import {
   getRecentUnmatchedTopics,
   deleteUnmatchedTopics,
   insertThemeRegistryEntry,
+  getDailyCostFromDb,
+  trackCostToDb,
 } from './db.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -46,60 +49,26 @@ interface BatchCost {
   estimated_usd: number;
 }
 
-// ─── Cost tracking ──────────────────────────────────────────────────────────
+// ─── Cost tracking (DB-backed, survives restarts) ───────────────────────────
 
 // Approximate pricing (USD per 1M tokens)
 const HAIKU_INPUT_COST_PER_M = 1.0; // $1.00 / 1M input tokens
 const HAIKU_OUTPUT_COST_PER_M = 5.0; // $5.00 / 1M output tokens
 const OPENAI_EMBED_COST_PER_M = 0.02; // $0.02 / 1M tokens
 
-interface DailyCostEntry {
-  date: string;
-  haiku_input_tokens: number;
-  haiku_output_tokens: number;
-  openai_embedding_tokens: number;
-  estimated_usd: number;
-  batches: number;
-}
-
-const dailyCosts: Map<string, DailyCostEntry> = new Map();
-
 function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
 function trackCost(cost: BatchCost): void {
-  const key = todayKey();
-  const existing = dailyCosts.get(key) ?? {
-    date: key,
-    haiku_input_tokens: 0,
-    haiku_output_tokens: 0,
-    openai_embedding_tokens: 0,
-    estimated_usd: 0,
-    batches: 0,
-  };
-
-  existing.haiku_input_tokens += cost.haiku_input_tokens;
-  existing.haiku_output_tokens += cost.haiku_output_tokens;
-  existing.openai_embedding_tokens += cost.openai_embedding_tokens;
-  existing.estimated_usd += cost.estimated_usd;
-  existing.batches += 1;
-
-  dailyCosts.set(key, existing);
+  trackCostToDb(todayKey(), cost.estimated_usd);
 }
 
-export function getDailyCost(): DailyCostEntry {
+export function getDailyCost(): { date: string; estimated_usd: number; batches: number } {
   const key = todayKey();
-  return (
-    dailyCosts.get(key) ?? {
-      date: key,
-      haiku_input_tokens: 0,
-      haiku_output_tokens: 0,
-      openai_embedding_tokens: 0,
-      estimated_usd: 0,
-      batches: 0,
-    }
-  );
+  const row = getDailyCostFromDb(key);
+  if (row) return { date: row.date, estimated_usd: row.total_usd, batches: row.batches };
+  return { date: key, estimated_usd: 0, batches: 0 };
 }
 
 // ─── Haiku entity extraction ────────────────────────────────────────────────
@@ -108,7 +77,7 @@ async function callHaiku(
   apiKey: string,
   tweets: Tweet[],
 ): Promise<{ result: HaikuBatchResponse; inputTokens: number; outputTokens: number }> {
-  const client = new OpenRouter({ apiKey });
+  const client = getOpenRouterClient(apiKey);
 
   const tweetsPayload = tweets.map((t) => ({
     tweet_id: t.id,
@@ -158,7 +127,7 @@ async function callOpenAIEmbeddings(
   apiKey: string,
   texts: string[],
 ): Promise<{ embeddings: number[][]; totalTokens: number }> {
-  const client = new OpenRouter({ apiKey });
+  const client = getOpenRouterClient(apiKey);
 
   const response = await client.embeddings.generate({
     model: 'openai/text-embedding-3-small',
@@ -200,57 +169,38 @@ function computeNoveltyScore(
   embedding: number[],
   themes: string[],
 ): number {
+  if (themes.length === 0) return 1.0;
   const db = getDb();
 
+  // Batch query: get embeddings for the 50 most recent tweets across ALL themes at once
+  const placeholders = themes.map(() => '?').join(',');
+  const rows = db.prepare(`
+    SELECT te.embedding
+    FROM tweet_themes tt
+    JOIN tweets t ON tt.tweet_id = t.id
+    JOIN tweet_embeddings te ON tt.tweet_id = te.tweet_id
+    WHERE tt.theme IN (${placeholders})
+    ORDER BY t.created_at DESC
+    LIMIT 50
+  `).all(...themes) as Array<{ embedding: Buffer }>;
+
+  if (rows.length < 5) return 1.0;
+
   let maxSimilarity = 0;
-  let totalExisting = 0;
-
-  for (const theme of themes) {
-    // Get the 50 most recent tweet IDs on this theme
-    const themeRows = db
-      .prepare(
-        `SELECT tt.tweet_id
-         FROM tweet_themes tt
-         JOIN tweets t ON tt.tweet_id = t.id
-         WHERE tt.theme = ?
-         ORDER BY t.created_at DESC
-         LIMIT 50`,
-      )
-      .all(theme) as Array<{ tweet_id: string }>;
-
-    totalExisting += themeRows.length;
-
-    for (const row of themeRows) {
-      // Retrieve the embedding for this existing tweet
-      try {
-        const embRow = db
-          .prepare(
-            `SELECT embedding FROM tweet_embeddings WHERE tweet_id = ?`,
-          )
-          .get(row.tweet_id) as { embedding: Buffer } | undefined;
-
-        if (embRow) {
-          const existingEmbedding = Array.from(
-            new Float32Array(
-              embRow.embedding.buffer,
-              embRow.embedding.byteOffset,
-              embRow.embedding.byteLength / 4,
-            ),
-          );
-          const sim = cosineSimilarity(embedding, existingEmbedding);
-          if (sim > maxSimilarity) {
-            maxSimilarity = sim;
-          }
-        }
-      } catch {
-        // Skip if embedding can't be read
-      }
+  for (const row of rows) {
+    try {
+      const existingEmbedding = Array.from(
+        new Float32Array(
+          row.embedding.buffer,
+          row.embedding.byteOffset,
+          row.embedding.byteLength / 4,
+        ),
+      );
+      const sim = cosineSimilarity(embedding, existingEmbedding);
+      if (sim > maxSimilarity) maxSimilarity = sim;
+    } catch {
+      // Skip if embedding can't be read
     }
-  }
-
-  // If fewer than 5 tweets exist on any of the themes, default to 1.0
-  if (totalExisting < 5) {
-    return 1.0;
   }
 
   return 1 - maxSimilarity;
@@ -266,24 +216,37 @@ function matchTopicToTheme(
 ): string | null {
   const db = getDb();
 
-  // Build or refresh cache from theme registry
+  // Build or refresh cache from theme registry (centroid of last 10 embeddings per theme)
   if (!themeEmbeddingCache) {
     themeEmbeddingCache = new Map();
     const themes = getAllThemeDescriptions();
     for (const t of themes) {
-      // Use the most recent tweet embedding for each theme as a proxy
-      const row = db.prepare(`
+      const rows = db.prepare(`
         SELECT te.embedding FROM tweet_embeddings te
         JOIN tweet_themes tt ON te.tweet_id = tt.tweet_id
         WHERE tt.theme = ?
-        ORDER BY te.rowid DESC LIMIT 1
-      `).get(t.theme) as { embedding: Buffer } | undefined;
+        ORDER BY te.rowid DESC LIMIT 10
+      `).all(t.theme) as Array<{ embedding: Buffer }>;
 
-      if (row) {
-        const emb = Array.from(new Float32Array(
-          row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4,
-        ));
-        themeEmbeddingCache.set(t.theme, emb);
+      if (rows.length === 0) continue;
+
+      // Compute centroid: element-wise average of all embeddings
+      let centroid: number[] | null = null;
+      for (const row of rows) {
+        try {
+          const emb = Array.from(new Float32Array(
+            row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4,
+          ));
+          if (!centroid) {
+            centroid = emb;
+          } else {
+            for (let i = 0; i < centroid.length; i++) centroid[i] += emb[i];
+          }
+        } catch { /* skip unreadable embedding */ }
+      }
+      if (centroid) {
+        for (let i = 0; i < centroid.length; i++) centroid[i] /= rows.length;
+        themeEmbeddingCache.set(t.theme, centroid);
       }
     }
   }
@@ -319,6 +282,14 @@ export async function enrichBatch(
   apiKey: string,
   config?: Config,
 ): Promise<{ processed: number; failed: number }> {
+  // Cost circuit breaker: halt enrichment if daily budget exceeded
+  const maxCostPerDay = config?.max_enrichment_cost_per_day ?? 10.0;
+  const currentCost = getDailyCostFromDb(todayKey());
+  if (currentCost && currentCost.total_usd >= maxCostPerDay) {
+    console.warn(`[enrichment] Daily cost limit reached ($${currentCost.total_usd.toFixed(2)} >= $${maxCostPerDay}) — skipping batch`);
+    return { processed: 0, failed: 0 };
+  }
+
   const BATCH_SIZE = 25;
   const tweets = getUnenrichedTweets(BATCH_SIZE);
 
@@ -340,10 +311,7 @@ export async function enrichBatch(
 
   // If Haiku call failed, mark all tweets as failed
   if (haikuResult.status === 'rejected') {
-    console.error(
-      `[enrichment] Haiku call failed for batch:`,
-      haikuResult.reason,
-    );
+    console.error(`[enrichment] Haiku call failed for batch:`, sanitizeError(haikuResult.reason));
     for (const tweet of tweets) {
       markEnrichmentFailed(tweet.id);
     }
@@ -352,10 +320,7 @@ export async function enrichBatch(
 
   // If OpenAI embedding call failed, mark all as failed (atomic — need both)
   if (embeddingResult.status === 'rejected') {
-    console.error(
-      `[enrichment] OpenAI embedding call failed for batch:`,
-      embeddingResult.reason,
-    );
+    console.error(`[enrichment] OpenAI embedding call failed for batch:`, sanitizeError(embeddingResult.reason));
     for (const tweet of tweets) {
       markEnrichmentFailed(tweet.id);
     }
@@ -551,7 +516,7 @@ export async function enrichBatch(
     } catch (err) {
       console.error(
         `[enrichment] Failed to process tweet ${tweet.id} (@${tweet.author_handle}):`,
-        err,
+        sanitizeError(err),
       );
       markEnrichmentFailed(tweet.id);
       failed++;
@@ -588,7 +553,7 @@ export async function discoverNewThemes(apiKey: string): Promise<{ created: numb
     return { created: 0, ignored: unmatched.length };
   }
 
-  const client = new OpenRouter({ apiKey });
+  const client = getOpenRouterClient(apiKey);
 
   const userPrompt = `EXISTING THEMES:\n${existingThemes.map(t => `- ${t.theme}: ${t.description}`).join('\n')}\n\nUNMATCHED TOPIC DESCRIPTIONS (${unmatched.length} tweets):\n${unmatched.map(u => `- "${u.topic_description}"`).join('\n')}`;
 
@@ -636,7 +601,7 @@ export async function discoverNewThemes(apiKey: string): Promise<{ created: numb
 
     return { created, ignored: parsed.ignored?.length ?? 0 };
   } catch (err) {
-    console.error('[themes] Sonnet theme discovery failed:', err);
+    console.error('[themes] Sonnet theme discovery failed:', sanitizeError(err));
     return { created: 0, ignored: 0 };
   }
 }

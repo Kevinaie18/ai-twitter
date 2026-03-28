@@ -255,6 +255,22 @@ function createTables(): void {
     CREATE INDEX IF NOT EXISTS idx_dc_author ON directional_calls(author_id);
     CREATE INDEX IF NOT EXISTS idx_dc_status ON directional_calls(status, call_date);
 
+    -- ─── Daily costs (DB-backed cost circuit breaker) ──────────────────────────
+
+    CREATE TABLE IF NOT EXISTS daily_costs (
+      date TEXT PRIMARY KEY,
+      total_usd REAL NOT NULL DEFAULT 0,
+      batches INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- ─── KV store (generic persistent key-value) ─────────────────────────────
+
+    CREATE TABLE IF NOT EXISTS kv_store (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     -- ─── FTS5 full-text search ─────────────────────────────────────────────────
 
     CREATE VIRTUAL TABLE IF NOT EXISTS tweets_fts USING fts5(
@@ -924,6 +940,36 @@ export function deleteUnmatchedTopics(ids: number[]): void {
   if (ids.length === 0) return;
   const placeholders = ids.map(() => '?').join(',');
   db.prepare(`DELETE FROM unmatched_topics WHERE id IN (${placeholders})`).run(...ids);
+}
+
+// ─── Daily Cost Operations (DB-backed, survives restarts) ───────────────────
+
+export function getDailyCostFromDb(date: string): { date: string; total_usd: number; batches: number } | null {
+  return db.prepare(`SELECT date, total_usd, batches FROM daily_costs WHERE date = ?`).get(date) as { date: string; total_usd: number; batches: number } | null;
+}
+
+export function trackCostToDb(date: string, batchCostUsd: number): void {
+  db.prepare(`
+    INSERT INTO daily_costs (date, total_usd, batches)
+    VALUES (?, ?, 1)
+    ON CONFLICT(date) DO UPDATE SET
+      total_usd = total_usd + excluded.total_usd,
+      batches = batches + 1
+  `).run(date, batchCostUsd);
+}
+
+// ─── KV Store (generic persistent key-value) ────────────────────────────────
+
+export function getKvValue(key: string): { value: string; updated_at: string } | null {
+  return db.prepare(`SELECT value, updated_at FROM kv_store WHERE key = ?`).get(key) as { value: string; updated_at: string } | null;
+}
+
+export function setKvValue(key: string, value: string): void {
+  db.prepare(`
+    INSERT INTO kv_store (key, value, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+  `).run(key, value, new Date().toISOString());
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

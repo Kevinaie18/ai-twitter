@@ -1,7 +1,7 @@
-import { schedule } from 'node-cron';
+import { schedule, ScheduledTask } from 'node-cron';
 import { Bot } from 'grammy';
 import { loadConfig, loadEnv, getRequiredEnv } from './config.js';
-import { initDb, getLastScrapedTweetId, syncCredibilityTags, syncListConfigs, seedThemeRegistry, getLastDigestSnapshot } from './db.js';
+import { initDb, getDb, getLastScrapedTweetId, insertTweets, upsertAccount, syncCredibilityTags, syncListConfigs, seedThemeRegistry, getLastDigestSnapshot } from './db.js';
 import { scrapeList } from './scraper.js';
 import { enrichBatch, discoverNewThemes } from './enrichment.js';
 import { generateDigest } from './digest.js';
@@ -9,14 +9,19 @@ import { createBot, sendDigest, sendAlert } from './bot.js';
 import { createDashboard } from './dashboard/index.js';
 import { resolveOpenCalls, setThemeTickerOverrides } from './intelligence.js';
 import type { Config } from './types.js';
+import { sanitizeError } from './utils.js';
+
+// ─── Shutdown coordination ───────────────────────────────────────────────────
+let shuttingDown = false;
+const cronTasks: ScheduledTask[] = [];
 
 // Global error handlers
 process.on('uncaughtException', (err) => {
-  console.error('[FATAL] Uncaught exception:', err);
+  console.error('[FATAL] Uncaught exception:', String(err));
   // Don't exit — systemd will restart if needed
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[FATAL] Unhandled rejection:', reason);
+  console.error('[FATAL] Unhandled rejection:', String(reason));
 });
 
 async function main() {
@@ -44,10 +49,10 @@ async function main() {
   // Start bot (non-blocking)
   bot.start({ onStart: () => console.log('[init] Telegram bot ready') });
 
-  // Start dashboard
+  // Start dashboard (capture server handle for graceful shutdown)
   const dashboardPort = config.dashboard?.port || 3000;
   const defaultListId = config.lists.find(l => l.active)?.id || '';
-  createDashboard(dashboardPort, env, { defaultListId });
+  const server = createDashboard(dashboardPort, env, { defaultListId });
   console.log(`[init] Dashboard at http://localhost:${dashboardPort}`);
 
   // ─── Startup scrape (cold boot data freshness) ─────────
@@ -71,14 +76,16 @@ async function main() {
 
   for (const [label, digestHour] of [['morning', morningHour], ['evening', eveningHour]] as const) {
     const cron = computePipelineCron(digestHour as number, offsetMin);
-    schedule(cron, async () => {
+    const task = schedule(cron, async () => {
+      if (shuttingDown) return;
       try {
         await runPreDigestPipeline(label, config, chatId, bot);
       } catch (err) {
-        console.error(`[pipeline] ${label} pipeline failed:`, err);
+        console.error(`[pipeline] ${label} pipeline failed:`, String(err));
         await sendAlert(bot, chatId, `⚠️ ${label} pre-digest pipeline failed: ${err}`);
       }
     });
+    cronTasks.push(task);
   }
   console.log(`[init] Pre-digest pipeline at ${computePipelineCron(morningHour, offsetMin)} and ${computePipelineCron(eveningHour, offsetMin)} UTC`);
 
@@ -86,16 +93,18 @@ async function main() {
 
   for (const hour of [morningHour, eveningHour]) {
     const digestType = hour === morningHour ? 'morning' as const : 'evening' as const;
-    schedule(`0 ${hour} * * *`, async () => {
+    const digestTask = schedule(`0 ${hour} * * *`, async () => {
+      if (shuttingDown) return;
       const freshEnv = loadEnv();
       const apiKey = getRequiredEnv(freshEnv, 'OPENROUTER_API_KEY');
 
       // Each digest covers the window since the LAST digest was generated.
       // Fallback: morning looks back 12h, evening looks back to morning hour.
       // This prevents overlapping windows that re-analyze the same tweets.
-      let since: string;
+      // NOTE: `since` must be scoped per-list to avoid list N inheriting list N-1's value.
       for (const list of config.lists.filter(l => l.active)) {
         const lastSnapshot = getLastDigestSnapshot(list.id);
+        let since: string;
         if (lastSnapshot) {
           // Start from where the last digest left off
           since = lastSnapshot.generated_at;
@@ -114,11 +123,12 @@ async function main() {
           await sendDigest(bot, chatId, result);
           console.log(`[digest] Sent for "${list.name}" (${result.tweet_count} tweets, delta: ${result.delta ? 'yes' : 'no'})`);
         } catch (err) {
-          console.error(`[digest] Error for "${list.name}":`, err);
+          console.error(`[digest] Error for "${list.name}":`, sanitizeError(err));
           await sendAlert(bot, chatId, `⚠️ Digest generation failed for ${list.name}: ${err}`);
         }
       }
     });
+    cronTasks.push(digestTask);
   }
   console.log(`[init] Digests scheduled at ${morningHour}:00 and ${eveningHour}:00 UTC`);
 
@@ -142,24 +152,51 @@ async function main() {
         }
       }
     } catch (err) {
-      console.error('[digest] Initial baseline failed (non-fatal):', err);
+      console.error('[digest] Initial baseline failed (non-fatal):', sanitizeError(err));
     }
   }, 30_000); // Wait 30s for enrichment to have some data
 
   // ─── Track record resolution cron (daily at midnight UTC) ─────────
   if (config.track_record?.enabled) {
-    schedule('0 0 * * *', () => {
+    const trTask = schedule('0 0 * * *', () => {
+      if (shuttingDown) return;
       try {
         const result = resolveOpenCalls(config);
         if (result.resolved > 0 || result.expired > 0) {
           console.log(`[track-record] Resolved ${result.resolved}, expired ${result.expired}`);
         }
       } catch (err) {
-        console.error('[track-record] Resolution error:', err);
+        console.error('[track-record] Resolution error:', String(err));
       }
     });
+    cronTasks.push(trTask);
     console.log('[init] Track record resolution scheduled daily at 00:00 UTC');
   }
+
+  // ─── Graceful shutdown ─────────────────────────────────────────────────────
+  function gracefulShutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`[shutdown] ${signal} received — shutting down gracefully...`);
+
+    // 1. Stop crons
+    for (const task of cronTasks) task.stop();
+
+    // 2. Stop bot
+    try { bot.stop(); } catch { /* already stopped */ }
+
+    // 3. Close HTTP server
+    try { server.close(); } catch { /* already closed */ }
+
+    // 4. Close database
+    try { getDb().close(); } catch { /* already closed */ }
+
+    console.log('[shutdown] Clean shutdown complete');
+    process.exit(0);
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
   console.log('[init] All systems ready ✓');
 }
@@ -184,8 +221,6 @@ async function runScrape(
     });
 
     if (result.tweets.length > 0) {
-      // Import here to avoid circular deps
-      const { insertTweets, upsertAccount } = await import('./db.js');
       insertTweets(result.tweets);
       for (const account of result.accounts) {
         upsertAccount(account);
@@ -244,7 +279,7 @@ async function runPreDigestPipeline(
   let batchCount = 0;
   const MAX_BATCHES = 100; // Safety: 100 × 25 = 2500 tweets max
 
-  while (batchCount < MAX_BATCHES) {
+  while (batchCount < MAX_BATCHES && !shuttingDown) {
     try {
       const result = await enrichBatch(apiKey, config);
       totalProcessed += result.processed;
@@ -252,7 +287,7 @@ async function runPreDigestPipeline(
       batchCount++;
       if (result.processed === 0 && result.failed === 0) break;
     } catch (err) {
-      console.error(`[pipeline] ${label} enrichment batch ${batchCount + 1} failed:`, err);
+      console.error(`[pipeline] ${label} enrichment batch ${batchCount + 1} failed:`, sanitizeError(err));
       batchCount++;
       // Continue draining — one failed batch shouldn't stop the rest
       // But if 3 consecutive batches fail, the API is probably down
@@ -271,13 +306,13 @@ async function runPreDigestPipeline(
       console.log(`[pipeline] ${label} discovered ${themeResult.created} new themes`);
     }
   } catch (err) {
-    console.error(`[pipeline] ${label} theme discovery error (non-fatal):`, err);
+    console.error(`[pipeline] ${label} theme discovery error (non-fatal):`, sanitizeError(err));
   }
 
   console.log(`[pipeline] ${label} complete in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 }
 
 main().catch(err => {
-  console.error('[FATAL] Startup failed:', err);
+  console.error('[FATAL] Startup failed:', sanitizeError(err));
   process.exit(1);
 });

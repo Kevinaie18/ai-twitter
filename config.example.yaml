@@ -23,6 +23,9 @@ enrichment:
   batch_size: 25
   max_tweets_per_scrape: 500
 
+# Cost circuit breaker — halt enrichment if daily LLM spend exceeds this
+max_enrichment_cost_per_day: 10.0
+
 dashboard:
   port: 3000
 
