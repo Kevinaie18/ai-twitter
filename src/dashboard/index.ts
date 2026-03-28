@@ -3,8 +3,8 @@ import path from 'path';
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { basicAuth } from 'hono/basic-auth';
-import * as db from '../db.js';
-import { getDb } from '../db.js';
+import * as db from '../db/index.js';
+import { getDb } from '../db/index.js';
 import { safeInt } from '../utils.js';
 
 // Cache static HTML at module load time (not on every request)

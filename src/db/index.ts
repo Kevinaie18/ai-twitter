@@ -13,7 +13,7 @@ import type {
   DirectionalCall,
   AuthorTrackRecord,
   ThemeRegistryEntry,
-} from './types.js';
+} from '../types.js';
 
 // ─── Module-level DB instance ────────────────────────────────────────────────
 

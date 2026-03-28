@@ -1,6 +1,6 @@
 import { Bot } from 'grammy';
-import { getOpenRouterClient } from './client.js';
-import { sanitizeError } from './utils.js';
+import { getOpenRouterClient } from '../client.js';
+import { sanitizeError } from '../utils.js';
 import {
   getDb,
   searchSimilar,
@@ -12,11 +12,11 @@ import {
   getScrapeHealth,
   getUnenrichedTweets,
   getAuthorTrackRecord,
-} from './db.js';
-import type { Config, ConsensusSnapshot } from './types.js';
-import { ASK_SYSTEM, THEME_SYNTHESIS_SYSTEM, WHO_SYNTHESIS_SYSTEM } from './prompts.js';
-import { getDailyCost } from './enrichment.js';
-import { generateDigest } from './digest.js';
+} from '../db/index.js';
+import type { Config, ConsensusSnapshot } from '../types.js';
+import { ASK_SYSTEM, THEME_SYNTHESIS_SYSTEM, WHO_SYNTHESIS_SYSTEM } from '../prompts.js';
+import { getDailyCost } from '../enrichment.js';
+import { generateDigest } from '../digest.js';
 
 // ─── Telegram Helpers ────────────────────────────────────────────────────────
 
@@ -129,7 +129,7 @@ function markdownToTelegramHtml(text: string): string {
  * Send a formatted digest message to a chat. Supports split format (TL;DR + deep dive as reply).
  * Converts markdown to Telegram HTML for proper rendering.
  */
-export async function sendDigest(bot: Bot, chatId: string, digest: string | import('./types.js').DigestResult): Promise<void> {
+export async function sendDigest(bot: Bot, chatId: string, digest: string | import('../types.js').DigestResult): Promise<void> {
   if (typeof digest === 'string') {
     await sendLongMessage(bot, chatId, markdownToTelegramHtml(digest), 'HTML');
     return;

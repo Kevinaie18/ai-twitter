@@ -7,7 +7,7 @@ import {
   getPriceData,
   getOpenCallsToResolve,
   resolveCall,
-} from './db.js';
+} from './db/index.js';
 import type { ConsensusSnapshot, Config, DigestSnapshot, DigestDelta } from './types.js';
 
 // ─── Theme-to-ticker mapping for backtesting ─────────────────────────────────

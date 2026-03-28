@@ -1,6 +1,6 @@
 import type { Tweet, Account } from './types.js';
 import { ScraperError } from './types.js';
-import { getKvValue, setKvValue } from './db.js';
+import { getKvValue, setKvValue } from './db/index.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 

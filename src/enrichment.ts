@@ -18,7 +18,7 @@ import {
   insertThemeRegistryEntry,
   getDailyCostFromDb,
   trackCostToDb,
-} from './db.js';
+} from './db/index.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 

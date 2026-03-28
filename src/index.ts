@@ -1,11 +1,11 @@
 import { schedule, ScheduledTask } from 'node-cron';
 import { Bot } from 'grammy';
 import { loadConfig, loadEnv, getRequiredEnv } from './config.js';
-import { initDb, getDb, getLastScrapedTweetId, insertTweets, upsertAccount, syncCredibilityTags, syncListConfigs, seedThemeRegistry, getLastDigestSnapshot } from './db.js';
+import { initDb, getDb, getLastScrapedTweetId, insertTweets, upsertAccount, syncCredibilityTags, syncListConfigs, seedThemeRegistry, getLastDigestSnapshot } from './db/index.js';
 import { scrapeList } from './scraper.js';
 import { enrichBatch, discoverNewThemes } from './enrichment.js';
 import { generateDigest } from './digest.js';
-import { createBot, sendDigest, sendAlert } from './bot.js';
+import { createBot, sendDigest, sendAlert } from './bot/index.js';
 import { createDashboard } from './dashboard/index.js';
 import { resolveOpenCalls, setThemeTickerOverrides } from './intelligence.js';
 import type { Config } from './types.js';

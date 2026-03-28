@@ -7,7 +7,7 @@ import {
   getTopTrackRecords,
   getAccountCredibilityTag,
   getAllAccounts,
-} from './db.js';
+} from './db/index.js';
 import type { DigestResult, ConsensusSnapshot, Config, DigestDelta } from './types.js';
 import { DIGEST_SYSTEM, TLDR_SYSTEM } from './prompts.js';
 import { getOpenRouterClient } from './client.js';
