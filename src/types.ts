@@ -43,6 +43,7 @@ export interface Config {
     credibility_tags?: Record<string, CredibilityTag>;
     default_tag?: CredibilityTag; // default 'unverified'
   };
+  max_enrichment_cost_per_day?: number;       // default 10.0 — circuit breaker for daily LLM spend
   theme_tickers?: Record<string, string[]>;  // custom theme → ticker mapping for backtesting
   track_record?: {
     enabled?: boolean;            // default false
