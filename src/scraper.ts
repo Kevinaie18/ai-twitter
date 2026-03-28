@@ -1,5 +1,6 @@
 import type { Tweet, Account } from './types.js';
 import { ScraperError } from './types.js';
+import { getKvValue, setKvValue } from './db.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -152,17 +153,28 @@ export async function scrapeList(
 ): Promise<ScrapeResult> {
   const { maxPages, lastKnownTweetId } = options;
 
-  // We need the query hash. Try to discover it dynamically.
+  // Query hash resolution: cached (if <24h) → discover → cached (any age) → hardcoded
   let queryHash: string;
-  try {
-    queryHash = await discoverQueryHash();
-  } catch {
-    // Fallback: use a known recent hash. This will break when X rotates it,
-    // but provides a degraded-graceful path.
-    console.warn(
-      '[scraper] Could not discover query hash dynamically; using fallback hash',
-    );
-    queryHash = 'L1DeQfPt7n3LtTvrBqkJ2g';
+  const HASH_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+  const HARDCODED_FALLBACK = 'L1DeQfPt7n3LtTvrBqkJ2g';
+
+  const cached = getKvValue('query_hash');
+  if (cached && (Date.now() - new Date(cached.updated_at).getTime()) < HASH_TTL_MS) {
+    queryHash = cached.value;
+  } else {
+    try {
+      queryHash = await discoverQueryHash();
+      setKvValue('query_hash', queryHash);
+    } catch {
+      // Fall back to cached hash (any age), then hardcoded
+      if (cached) {
+        console.warn('[scraper] Discovery failed; using stale cached hash');
+        queryHash = cached.value;
+      } else {
+        console.warn('[scraper] Discovery failed, no cache; using hardcoded fallback');
+        queryHash = HARDCODED_FALLBACK;
+      }
+    }
   }
 
   const allTweets: Tweet[] = [];

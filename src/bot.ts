@@ -1,5 +1,6 @@
 import { Bot } from 'grammy';
-import { OpenRouter } from '@openrouter/sdk';
+import { getOpenRouterClient } from './client.js';
+import { sanitizeError } from './utils.js';
 import {
   getDb,
   searchSimilar,
@@ -152,8 +153,8 @@ export async function sendAlert(bot: Bot, chatId: string, alertText: string): Pr
 
 // ─── Semantic Search for /ask ────────────────────────────────────────────────
 
-function createClient(apiKey: string): OpenRouter {
-  return new OpenRouter({ apiKey });
+function createClient(apiKey: string) {
+  return getOpenRouterClient(apiKey);
 }
 
 async function embedQuery(apiKey: string, query: string): Promise<number[]> {
@@ -329,7 +330,7 @@ export function createBot(token: string, env: Record<string, string>, config?: C
       const header = `Search: ${searchMethod} | ${tweets.length} tweets analyzed\n\n`;
       await sendLongMessage(bot, ctx.chat.id.toString(), header + answer);
     } catch (err) {
-      console.error('[bot /ask] Error:', err);
+      console.error('[bot /ask] Error:', sanitizeError(err));
       await ctx.reply('An error occurred while processing your question. Please try again.');
     }
   });
@@ -388,7 +389,7 @@ export function createBot(token: string, env: Record<string, string>, config?: C
       const header = 'CONSENSUS MAP\n\n';
       await sendLongMessage(bot, ctx.chat.id.toString(), header + sections.join('\n\n'));
     } catch (err) {
-      console.error('[bot /consensus] Error:', err);
+      console.error('[bot /consensus] Error:', sanitizeError(err));
       await ctx.reply('Failed to retrieve consensus data.');
     }
   });
@@ -488,7 +489,7 @@ export function createBot(token: string, env: Record<string, string>, config?: C
         await sendLongMessage(bot, ctx.chat.id.toString(), rawData);
       }
     } catch (err) {
-      console.error('[bot /theme] Error:', err);
+      console.error('[bot /theme] Error:', sanitizeError(err));
       await ctx.reply('Failed to retrieve theme data.');
     }
   });
@@ -598,7 +599,7 @@ export function createBot(token: string, env: Record<string, string>, config?: C
         await sendLongMessage(bot, ctx.chat.id.toString(), rawData);
       }
     } catch (err) {
-      console.error('[bot /who] Error:', err);
+      console.error('[bot /who] Error:', sanitizeError(err));
       await ctx.reply('Failed to retrieve account data.');
     }
   });
@@ -679,7 +680,7 @@ export function createBot(token: string, env: Record<string, string>, config?: C
       const header = `CROSS-LIST DIVERGENCE\n\nThemes where lists disagree:\n\n`;
       await sendLongMessage(bot, ctx.chat.id.toString(), header + divergences.join('\n'));
     } catch (err) {
-      console.error('[bot /compare] Error:', err);
+      console.error('[bot /compare] Error:', sanitizeError(err));
       await ctx.reply('Failed to run cross-list comparison.');
     }
   });
@@ -719,7 +720,7 @@ export function createBot(token: string, env: Record<string, string>, config?: C
         const result = await generateDigest(list.list_id, list.name, since, openrouterKey, config, 'manual', mode);
         await sendDigest(bot, ctx.chat.id.toString(), result);
       } catch (err) {
-        console.error(`[bot /digest] Error for "${list.name}":`, err);
+        console.error(`[bot /digest] Error for "${list.name}":`, sanitizeError(err));
         await ctx.reply(`Failed to generate digest for ${list.name}.`);
       }
     }
@@ -786,13 +787,11 @@ export function createBot(token: string, env: Record<string, string>, config?: C
       lines.push('');
       lines.push(`Daily API Cost (${cost.date}):`);
       lines.push(`  Estimated: $${cost.estimated_usd.toFixed(4)}`);
-      lines.push(`  Haiku tokens: ${cost.haiku_input_tokens} in / ${cost.haiku_output_tokens} out`);
-      lines.push(`  OpenAI embed tokens: ${cost.openai_embedding_tokens}`);
       lines.push(`  Batches processed: ${cost.batches}`);
 
       await sendLongMessage(bot, ctx.chat.id.toString(), lines.join('\n'));
     } catch (err) {
-      console.error('[bot /status] Error:', err);
+      console.error('[bot /status] Error:', sanitizeError(err));
       await ctx.reply('Failed to retrieve system status.');
     }
   });

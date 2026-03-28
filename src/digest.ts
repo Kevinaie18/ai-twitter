@@ -1,4 +1,3 @@
-import { OpenRouter } from '@openrouter/sdk';
 import {
   getDb,
   getDigestTweets,
@@ -11,6 +10,8 @@ import {
 } from './db.js';
 import type { DigestResult, ConsensusSnapshot, Config, DigestDelta } from './types.js';
 import { DIGEST_SYSTEM, TLDR_SYSTEM } from './prompts.js';
+import { getOpenRouterClient } from './client.js';
+import { sanitizeError } from './utils.js';
 import {
   generateAllSnapshots,
   detectConsensusAlerts,
@@ -212,7 +213,7 @@ export async function generateDigest(
       delta,
     };
   } catch (err) {
-    console.error('[digest] Opus call failed, falling back to raw stats:', err);
+    console.error('[digest] Opus call failed, falling back to raw stats:', sanitizeError(err));
     return generateRawStatsDigest(listId, listName, effectiveSince);
   }
 }
@@ -457,7 +458,7 @@ async function callOpus(
   hasPreviousSnapshot: boolean = false,
   enrichmentCoverage: number = 1,
 ): Promise<string> {
-  const client = new OpenRouter({ apiKey });
+  const client = getOpenRouterClient(apiKey);
 
   // Build structured prompt sections
   const sections: string[] = [];
@@ -648,7 +649,7 @@ async function generateTldr(
   fullDigest: string,
   maxWords: number,
 ): Promise<string> {
-  const client = new OpenRouter({ apiKey });
+  const client = getOpenRouterClient(apiKey);
 
   const response = await client.chat.send({
     model: 'anthropic/claude-haiku-4.5',

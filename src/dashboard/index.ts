@@ -6,6 +6,23 @@ import { basicAuth } from 'hono/basic-auth';
 import * as db from '../db.js';
 import { getDb } from '../db.js';
 
+// Cache static HTML at module load time (not on every request)
+let cachedHtml: string | null = null;
+function getHtml(): string {
+  if (!cachedHtml) {
+    const htmlPath = path.join(import.meta.dirname, 'public', 'index.html');
+    cachedHtml = fs.readFileSync(htmlPath, 'utf8');
+  }
+  return cachedHtml;
+}
+
+function safeInt(val: string | undefined, fallback: number, max: number = 10000): number {
+  if (!val) return fallback;
+  const n = parseInt(val, 10);
+  if (isNaN(n) || n < 0) return fallback;
+  return Math.min(n, max);
+}
+
 export function createDashboard(port: number, env: Record<string, string>, config?: { defaultListId?: string }) {
   const app = new Hono();
 
@@ -23,7 +40,7 @@ export function createDashboard(port: number, env: Record<string, string>, confi
   // GET /api/overview — dashboard overview data
   app.get('/api/overview', (c) => {
     const listId = c.req.query('list_id') || defaultListId;
-    const days = parseInt(c.req.query('days') || '7');
+    const days = safeInt(c.req.query('days'), 7, 365);
 
     const consensus = db.getLatestConsensusForAllThemes(listId);
     const health = db.getScrapeHealth();
@@ -36,7 +53,7 @@ export function createDashboard(port: number, env: Record<string, string>, confi
   app.get('/api/consensus-history', (c) => {
     const listId = c.req.query('list_id') || defaultListId;
     const theme = c.req.query('theme') || '';
-    const days = parseInt(c.req.query('days') || '30');
+    const days = safeInt(c.req.query('days'), 30, 365);
     const snapshots = db.getConsensusSnapshots(listId, theme, days);
     return c.json({ snapshots });
   });
@@ -44,7 +61,7 @@ export function createDashboard(port: number, env: Record<string, string>, confi
   // GET /api/themes — all themes with tweet counts
   app.get('/api/themes', (c) => {
     const listId = c.req.query('list_id') || defaultListId;
-    const days = parseInt(c.req.query('days') || '7');
+    const days = safeInt(c.req.query('days'), 7, 365);
     const themes = db.getRecentThemes(listId, days * 24);
     return c.json({ themes });
   });
@@ -53,7 +70,7 @@ export function createDashboard(port: number, env: Record<string, string>, confi
   app.get('/api/theme/:name', (c) => {
     const theme = decodeURIComponent(c.req.param('name'));
     const listId = c.req.query('list_id') || defaultListId;
-    const days = parseInt(c.req.query('days') || '7');
+    const days = safeInt(c.req.query('days'), 7, 365);
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
     const tweets = db.getTweetsByTheme(theme, since, listId || undefined);
@@ -80,11 +97,11 @@ export function createDashboard(port: number, env: Record<string, string>, confi
   // GET /api/search — search tweets via FTS5
   app.get('/api/search', (c) => {
     const query = c.req.query('q') || '';
-    const limit = parseInt(c.req.query('limit') || '50');
+    const limit = safeInt(c.req.query('limit'), 50, 100);
     // Sanitize FTS5 query syntax to prevent malformed/expensive queries
     const sanitized = query.replace(/['"():*^~]/g, ' ').trim();
     if (!sanitized) return c.json({ results: [] });
-    const results = db.searchTweetsFTS(sanitized, Math.min(limit, 100));
+    const results = db.searchTweetsFTS(sanitized, limit);
     return c.json({ results });
   });
 
@@ -97,7 +114,7 @@ export function createDashboard(port: number, env: Record<string, string>, confi
   // GET /api/track-records — top track records with hit rates
   app.get('/api/track-records', (c) => {
     const listId = c.req.query('list_id') || defaultListId;
-    const minCalls = parseInt(c.req.query('min_calls') || '5');
+    const minCalls = safeInt(c.req.query('min_calls'), 5, 100);
     const records = db.getTopTrackRecords(listId, minCalls);
     return c.json({ records });
   });
@@ -123,7 +140,7 @@ export function createDashboard(port: number, env: Record<string, string>, confi
   // GET /api/digests — recent digest snapshots with delta data
   app.get('/api/digests', (c) => {
     const listId = c.req.query('list_id') || defaultListId;
-    const limit = parseInt(c.req.query('limit') || '10');
+    const limit = safeInt(c.req.query('limit'), 10, 50);
     const database = getDb();
     const digests = database.prepare(`
       SELECT id, list_id, generated_at, digest_type, tweet_count,
@@ -132,7 +149,7 @@ export function createDashboard(port: number, env: Record<string, string>, confi
       WHERE list_id = ?
       ORDER BY generated_at DESC
       LIMIT ?
-    `).all(listId, Math.min(limit, 50));
+    `).all(listId, limit);
     return c.json({ digests });
   });
 
@@ -147,12 +164,10 @@ export function createDashboard(port: number, env: Record<string, string>, confi
   // ─── SPA: serve index.html for all non-API routes ────────────────────────────
 
   app.get('*', (c) => {
-    const htmlPath = path.join(import.meta.dirname, 'public', 'index.html');
-    const html = fs.readFileSync(htmlPath, 'utf8');
-    return c.html(html);
+    return c.html(getHtml());
   });
 
-  serve({ fetch: app.fetch, port });
+  const server = serve({ fetch: app.fetch, port });
   console.log(`[dashboard] Listening on http://localhost:${port}`);
-  return app;
+  return server;
 }
