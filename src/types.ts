@@ -19,6 +19,8 @@ export interface Config {
     delta_enabled?: boolean;      // default true
     format?: 'single' | 'split'; // default 'single'
     tldr_max_words?: number;      // default 150
+    max_window_days?: number;     // default 30 — clamp full-corpus digests to this many days
+    pre_digest_offset_min?: number; // default 60 — minutes before digest to run scrape+enrich pipeline
   };
   consensus: {
     threshold_pct: number;

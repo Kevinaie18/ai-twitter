@@ -567,11 +567,14 @@ export function getThemeAccountSentiments(
   theme: string,
   since: string
 ): Array<{ author_id: string; author_handle: string; sentiment: string; tweet_count: number }> {
+  // Normalize sentiment to lowercase in SQL to avoid case-mismatch grouping
+  // (e.g., 'Bullish' vs 'bullish' being treated as separate groups)
+  // Exclude NULL sentiments — they mean "not enriched yet", not "neutral"
   return db.prepare(`
     SELECT
       t.author_id,
       t.author_handle,
-      e.sentiment,
+      LOWER(e.sentiment) AS sentiment,
       COUNT(*) AS tweet_count
     FROM tweets t
     JOIN tweet_themes tt ON t.id = tt.tweet_id
@@ -580,7 +583,9 @@ export function getThemeAccountSentiments(
       AND tt.theme = ?
       AND t.created_at >= ?
       AND e.status = 'complete'
-    GROUP BY t.author_id, e.sentiment
+      AND e.sentiment IS NOT NULL
+      AND e.sentiment != ''
+    GROUP BY t.author_id, LOWER(e.sentiment)
     ORDER BY tweet_count DESC
   `).all(listId, theme, since) as Array<{
     author_id: string;
@@ -771,7 +776,9 @@ export function insertDigestSnapshot(snapshot: Omit<DigestSnapshot, 'id'>): void
   db.prepare(`DELETE FROM digest_snapshots WHERE generated_at < datetime('now', '-30 days')`).run();
 }
 
-export function getLastDigestSnapshot(listId: string): DigestSnapshot | null {
+export function getLastDigestSnapshot(listId: string, digestType?: string): DigestSnapshot | null {
+  // When digestType is provided, get the most recent snapshot of ANY type for this list.
+  // This ensures morning digests compare against the previous evening and vice versa.
   const row = db.prepare(`
     SELECT * FROM digest_snapshots WHERE list_id = ? ORDER BY generated_at DESC LIMIT 1
   `).get(listId) as DigestSnapshot | undefined;
