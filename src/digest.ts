@@ -7,6 +7,7 @@ import {
   insertDigestSnapshot,
   getTopTrackRecords,
   getAccountCredibilityTag,
+  getAllAccounts,
 } from './db.js';
 import type { DigestResult, ConsensusSnapshot, Config, DigestDelta } from './types.js';
 import { DIGEST_SYSTEM, TLDR_SYSTEM } from './prompts.js';
@@ -57,12 +58,29 @@ export async function generateDigest(
 ): Promise<DigestResult> {
   const now = new Date().toISOString();
 
-  // Step 1: Get tweets — cap depends on mode
-  // initial: no cap (full corpus baseline), scheduled: 500 cap, manual: no cap
-  let tweets = getDigestTweets(listId, since);
-  if (mode === 'scheduled' && tweets.length > 500) {
-    console.warn(`[digest] Window returned ${tweets.length} tweets — capping to 500 most recent`);
-    tweets = tweets.slice(0, 500); // Already sorted by created_at DESC
+  // Step 0.5: Clamp full-corpus window to max_window_days (default 30)
+  // Prevents memory bloat when /digest full or initial bootstrap fetches all tweets ever
+  let effectiveSince = since;
+  if (mode === 'initial') {
+    const maxDays = config.digest?.max_window_days ?? 30;
+    const clampDate = new Date(Date.now() - maxDays * 24 * 60 * 60 * 1000).toISOString();
+    if (since < clampDate) {
+      console.log(`[digest] Clamping full-corpus window from ${since.slice(0, 10)} to last ${maxDays} days`);
+      effectiveSince = clampDate;
+    }
+  }
+
+  // Step 1: Get tweets in the window
+  // No count cap — all tweets feed consensus/clustering/emerging.
+  // Only 3 representative tweets per theme reach Opus, so the LLM payload
+  // stays small regardless of input size.
+  const tweets = getDigestTweets(listId, effectiveSince);
+
+  // Step 1.5: Track enrichment coverage
+  const enrichedCount = tweets.filter((t: any) => t.enrichment_status === 'complete').length;
+  const enrichmentCoverage = tweets.length > 0 ? enrichedCount / tweets.length : 1;
+  if (enrichmentCoverage < 0.7) {
+    console.warn(`[digest] Low enrichment coverage: ${(enrichmentCoverage * 100).toFixed(0)}% (${enrichedCount}/${tweets.length})`);
   }
 
   if (tweets.length === 0) {
@@ -76,7 +94,7 @@ export async function generateDigest(
   }
 
   // Step 2: Generate all consensus snapshots for the window
-  const snapshots = generateAllSnapshots(listId, since);
+  const snapshots = generateAllSnapshots(listId, effectiveSince);
   const snapshotByTheme = new Map<string, ConsensusSnapshot>();
   for (const s of snapshots) {
     snapshotByTheme.set(s.theme, s);
@@ -96,7 +114,7 @@ export async function generateDigest(
   const emerging = detectEmergingNarratives(listId, dataAgeDays);
 
   // Step 5: Cluster tweets by theme
-  let themeClusters = clusterByTheme(listId, since, tweets, snapshotByTheme);
+  let themeClusters = clusterByTheme(listId, effectiveSince, tweets, snapshotByTheme);
 
   // Step 5.5: Apply signal noise floor
   const minAccounts = config.signal_floor?.min_accounts ?? 3;
@@ -124,8 +142,10 @@ export async function generateDigest(
 
   // Step 6.5: Compute delta from previous digest
   let delta: DigestDelta | undefined;
+  let hasPreviousSnapshot = false;
   if (config.digest?.delta_enabled !== false) {
-    const previousSnapshot = getLastDigestSnapshot(listId);
+    const previousSnapshot = getLastDigestSnapshot(listId, digestType);
+    hasPreviousSnapshot = previousSnapshot !== null;
     delta = computeDigestDelta(themesCovered, snapshotByTheme, previousSnapshot);
     // Only include delta if there's actual content
     if (delta.new_themes.length === 0 && delta.dropped_themes.length === 0 && delta.consensus_shifts.length === 0) {
@@ -141,14 +161,17 @@ export async function generateDigest(
   try {
     const digestText = await callOpus(
       apiKey,
+      listId,
       listName,
       tweets.length,
-      since,
+      effectiveSince,
       themeClusters.slice(0, maxThemes),
       alerts,
       emerging,
       delta,
       trackRecords,
+      hasPreviousSnapshot,
+      enrichmentCoverage,
     );
 
     // Step 7.5: Generate TL;DR if split format
@@ -190,7 +213,7 @@ export async function generateDigest(
     };
   } catch (err) {
     console.error('[digest] Opus call failed, falling back to raw stats:', err);
-    return generateRawStatsDigest(listId, listName, since);
+    return generateRawStatsDigest(listId, listName, effectiveSince);
   }
 }
 
@@ -422,6 +445,7 @@ function clusterByTheme(
 
 async function callOpus(
   apiKey: string,
+  listId: string,
   listName: string,
   tweetCount: number,
   since: string,
@@ -430,6 +454,8 @@ async function callOpus(
   emerging: EmergingNarrative[],
   delta?: DigestDelta,
   trackRecords?: import('./types.js').AuthorTrackRecord[],
+  hasPreviousSnapshot: boolean = false,
+  enrichmentCoverage: number = 1,
 ): Promise<string> {
   const client = new OpenRouter({ apiKey });
 
@@ -440,14 +466,30 @@ async function callOpus(
   const sinceDate = new Date(since);
   const sinceHuman = sinceDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
     ' ' + sinceDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) + ' UTC';
+  const nowDate = new Date();
+  const nowHuman = nowDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+    ' ' + nowDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' }) + ' UTC';
   sections.push(`You are generating a financial intelligence digest for the Twitter/X list "${listName}".`);
-  sections.push(`Time window: since ${sinceHuman}`);
+  sections.push(`Time window: ${sinceHuman} → ${nowHuman}`);
   sections.push(`Total tweets in window: ${tweetCount}`);
+  if (enrichmentCoverage < 0.95) {
+    sections.push(`Enrichment coverage: ${(enrichmentCoverage * 100).toFixed(0)}% (${Math.round(tweetCount * enrichmentCoverage)}/${tweetCount} tweets enriched). Consensus and sentiment figures reflect enriched tweets only.`);
+  }
+
+  // List the curated accounts so Opus knows which handles are on the list
+  const listAccounts = getAllAccounts(listId);
+  if (listAccounts.length > 0) {
+    const handleList = listAccounts.map(a => `@${a.author_handle}`).join(', ');
+    sections.push(`CURATED LIST ACCOUNTS (only cite these by @handle): ${handleList}`);
+    sections.push('External sources should be cited by publication name (e.g., "per Axios", "per FT") — NOT by external Twitter handles.');
+  }
   sections.push('');
 
-  // Delta section (what changed since last digest) — suppress entirely if no delta data
-  if (delta && (delta.new_themes.length > 0 || delta.dropped_themes.length > 0 || delta.consensus_shifts.length > 0)) {
-    sections.push('=== WHAT CHANGED SINCE LAST DIGEST ===');
+  // Delta section (what changed since last digest)
+  sections.push('=== WHAT CHANGED SINCE LAST DIGEST ===');
+  if (!hasPreviousSnapshot) {
+    sections.push('First digest for this list — no prior comparison available.');
+  } else if (delta && (delta.new_themes.length > 0 || delta.dropped_themes.length > 0 || delta.consensus_shifts.length > 0)) {
     // Consensus shifts first (most valuable signal)
     for (const shift of delta.consensus_shifts) {
       sections.push(`Consensus shift: ${shift.theme} — ${shift.old_direction} ${shift.old_pct.toFixed(0)}% → ${shift.new_direction} ${shift.new_pct.toFixed(0)}%`);
@@ -458,9 +500,10 @@ async function callOpus(
     if (delta.dropped_themes.length > 0) {
       sections.push(`Themes dropped off: ${delta.dropped_themes.join(', ')}`);
     }
-    sections.push('');
+  } else {
+    sections.push('No significant changes from last digest — same themes and consensus directions persist.');
   }
-  // Note: if no delta, we intentionally omit the section entirely (not "no comparison available")
+  sections.push('');
 
   // Track records
   if (trackRecords && trackRecords.length > 0) {
@@ -575,7 +618,7 @@ async function callOpus(
 
   const dataPrompt = sections.join('\n');
 
-  const systemPrompt = DIGEST_SYSTEM(listName, tweetCount, since);
+  const systemPrompt = DIGEST_SYSTEM(listName, tweetCount);
 
   const response = await client.chat.send({
     model: 'anthropic/claude-opus-4.6',

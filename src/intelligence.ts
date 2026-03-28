@@ -267,9 +267,13 @@ export interface EmergingNarrative {
 
 /**
  * Detect emerging narratives:
- * 1. Get all topics (entity_value of type 'topic') mentioned by >3 unique accounts in last 6 hours
- * 2. Check if topic appeared in last 30 days of history
- * 3. If not in history AND dataAgeDays >= 7 (suppress cold-start), return as emerging
+ * 1. Get all topics (entity_value of type 'topic') mentioned by >3 unique accounts in last 48h
+ * 2. Check if topic appeared in ANY prior history (tweets or themes) — not just 30 days
+ * 3. Filter out topics that map to established themes with significant tweet history
+ * 4. If not in history AND dataAgeDays >= 7 (suppress cold-start), return as emerging
+ *
+ * "Emerging" means genuinely new in the last 48 hours with zero prior history.
+ * Topics that have been discussed for weeks/months are NOT emerging, even if growing.
  */
 export function detectEmergingNarratives(
   listId: string,
@@ -282,7 +286,7 @@ export function detectEmergingNarratives(
 
   const db = getDb();
 
-  // Get topics mentioned by >3 unique accounts in the last 6 hours
+  // Get topics mentioned by >3 unique accounts in the last 48 hours
   const recentTopics = db
     .prepare(
       `SELECT
@@ -293,7 +297,7 @@ export function detectEmergingNarratives(
        JOIN tweets t ON te.tweet_id = t.id
        WHERE te.entity_type = 'topic'
          AND t.list_id = ?
-         AND t.created_at >= datetime('now', '-6 hours')
+         AND t.created_at >= datetime('now', '-48 hours')
        GROUP BY te.entity_value
        HAVING COUNT(DISTINCT t.author_id) > 3
        ORDER BY account_count DESC`,
@@ -304,10 +308,39 @@ export function detectEmergingNarratives(
     first_mention: string;
   }>;
 
+  // Get all established themes with their tweet counts for cross-reference
+  const establishedThemes = db
+    .prepare(`SELECT theme, tweet_count FROM theme_registry WHERE tweet_count > 10`)
+    .all() as Array<{ theme: string; tweet_count: number }>;
+  const establishedThemeNames = new Set(establishedThemes.map(t => t.theme.toLowerCase()));
+  // Also collect descriptive words from theme names for fuzzy matching
+  const themeWords = new Set<string>();
+  for (const t of establishedThemes) {
+    for (const word of t.theme.split('_')) {
+      if (word.length > 2) themeWords.add(word.toLowerCase());
+    }
+  }
+
   const emerging: EmergingNarrative[] = [];
 
   for (const row of recentTopics) {
-    // Check if this topic appeared in the prior 30 days (excluding the last 6 hours)
+    const topicLower = row.topic.toLowerCase();
+
+    // Skip if topic matches an established theme name directly
+    if (establishedThemeNames.has(topicLower) || establishedThemeNames.has(topicLower.replace(/[^a-z_]/g, '_'))) {
+      continue;
+    }
+
+    // Skip if topic's primary words overlap with established theme names
+    // (e.g., "AI infrastructure" overlaps with "ai_infra" theme)
+    const topicWords = topicLower.split(/[\s_-]+/).filter(w => w.length > 2);
+    const overlapCount = topicWords.filter(w => themeWords.has(w)).length;
+    if (overlapCount >= 2 || (topicWords.length <= 2 && overlapCount >= 1)) {
+      continue;
+    }
+
+    // Check if this topic appeared in ANY prior history (before the last 48h)
+    // Using the full history, not just 30 days — established topics are never "emerging"
     const historicalCount = db
       .prepare(
         `SELECT COUNT(*) AS cnt
@@ -316,12 +349,23 @@ export function detectEmergingNarratives(
          WHERE te.entity_type = 'topic'
            AND te.entity_value = ?
            AND t.list_id = ?
-           AND t.created_at >= datetime('now', '-30 days')
-           AND t.created_at < datetime('now', '-6 hours')`,
+           AND t.created_at < datetime('now', '-48 hours')`,
       )
       .get(row.topic, listId) as { cnt: number };
 
-    if (historicalCount.cnt === 0) {
+    // Also check if the topic matches any existing tweet_themes with history
+    const themeHistoryCount = db
+      .prepare(
+        `SELECT COUNT(*) AS cnt
+         FROM tweet_themes tt
+         JOIN tweets t ON tt.tweet_id = t.id
+         WHERE LOWER(tt.theme) LIKE '%' || ? || '%'
+           AND t.list_id = ?
+           AND t.created_at < datetime('now', '-48 hours')`,
+      )
+      .get(topicLower.replace(/\s+/g, '_'), listId) as { cnt: number };
+
+    if (historicalCount.cnt === 0 && themeHistoryCount.cnt === 0) {
       emerging.push({
         topic: row.topic,
         account_count: row.account_count,
