@@ -82,7 +82,7 @@ async function main() {
         await runPreDigestPipeline(label, config, chatId, bot);
       } catch (err) {
         console.error(`[pipeline] ${label} pipeline failed:`, String(err));
-        await sendAlert(bot, chatId, `⚠️ ${label} pre-digest pipeline failed: ${err}`);
+        await sendAlert(bot, chatId, `⚠️ ${label} pre-digest pipeline failed: ${sanitizeError(err)}`);
       }
     });
     cronTasks.push(task);
@@ -124,7 +124,7 @@ async function main() {
           console.log(`[digest] Sent for "${list.name}" (${result.tweet_count} tweets, delta: ${result.delta ? 'yes' : 'no'})`);
         } catch (err) {
           console.error(`[digest] Error for "${list.name}":`, sanitizeError(err));
-          await sendAlert(bot, chatId, `⚠️ Digest generation failed for ${list.name}: ${err}`);
+          await sendAlert(bot, chatId, `⚠️ Digest generation failed for ${list.name}: ${sanitizeError(err)}`);
         }
       }
     });
@@ -285,6 +285,10 @@ async function runPreDigestPipeline(
       totalProcessed += result.processed;
       totalFailed += result.failed;
       batchCount++;
+      if (result.throttled) {
+        console.warn(`[pipeline] ${label} enrichment throttled — daily cost budget reached`);
+        break;
+      }
       if (result.processed === 0 && result.failed === 0) break;
     } catch (err) {
       console.error(`[pipeline] ${label} enrichment batch ${batchCount + 1} failed:`, sanitizeError(err));

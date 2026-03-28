@@ -281,13 +281,13 @@ export function invalidateThemeEmbeddingCache(): void {
 export async function enrichBatch(
   apiKey: string,
   config?: Config,
-): Promise<{ processed: number; failed: number }> {
+): Promise<{ processed: number; failed: number; throttled?: boolean }> {
   // Cost circuit breaker: halt enrichment if daily budget exceeded
   const maxCostPerDay = config?.max_enrichment_cost_per_day ?? 10.0;
   const currentCost = getDailyCostFromDb(todayKey());
   if (currentCost && currentCost.total_usd >= maxCostPerDay) {
     console.warn(`[enrichment] Daily cost limit reached ($${currentCost.total_usd.toFixed(2)} >= $${maxCostPerDay}) — skipping batch`);
-    return { processed: 0, failed: 0 };
+    return { processed: 0, failed: 0, throttled: true };
   }
 
   const BATCH_SIZE = 25;

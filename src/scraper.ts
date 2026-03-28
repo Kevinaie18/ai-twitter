@@ -344,7 +344,7 @@ export async function scrapeList(
 
 // ─── Tweet Parsing ──────────────────────────────────────────────────────────
 
-interface ParsedEntry {
+export interface ParsedEntry {
   tweet: Tweet;
   account: Account;
 }
@@ -353,7 +353,7 @@ interface ParsedEntry {
  * Parse a single timeline entry into a Tweet + Account.
  * Returns null if the entry is malformed (logged as warning, never throws).
  */
-function parseTweetEntry(entry: any, listId: string): ParsedEntry | null {
+export function parseTweetEntry(entry: any, listId: string): ParsedEntry | null {
   // Navigate through the tweet result wrapper.
   // Tweets can be nested under content.itemContent.tweet_results.result,
   // and may have a __typename of "TweetWithVisibilityResults" wrapping the actual tweet.

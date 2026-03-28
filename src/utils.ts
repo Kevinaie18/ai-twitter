@@ -34,3 +34,19 @@ export function safeInt(val: string | undefined, fallback: number, max: number =
   if (isNaN(n) || n < 0) return fallback;
   return Math.min(n, max);
 }
+
+/**
+ * Extract JSON from LLM output. Handles:
+ * - Raw JSON
+ * - JSON wrapped in ```json ... ``` fences
+ * - JSON wrapped in ``` ... ``` fences (no language tag)
+ * Returns the parsed object, or throws if unparseable.
+ */
+export function extractJsonFromLlm<T = unknown>(text: string): T {
+  let jsonStr = text.trim();
+  const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenceMatch) {
+    jsonStr = fenceMatch[1].trim();
+  }
+  return JSON.parse(jsonStr) as T;
+}

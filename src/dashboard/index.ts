@@ -5,6 +5,7 @@ import { serve } from '@hono/node-server';
 import { basicAuth } from 'hono/basic-auth';
 import * as db from '../db.js';
 import { getDb } from '../db.js';
+import { safeInt } from '../utils.js';
 
 // Cache static HTML at module load time (not on every request)
 let cachedHtml: string | null = null;
@@ -14,13 +15,6 @@ function getHtml(): string {
     cachedHtml = fs.readFileSync(htmlPath, 'utf8');
   }
   return cachedHtml;
-}
-
-function safeInt(val: string | undefined, fallback: number, max: number = 10000): number {
-  if (!val) return fallback;
-  const n = parseInt(val, 10);
-  if (isNaN(n) || n < 0) return fallback;
-  return Math.min(n, max);
 }
 
 export function createDashboard(port: number, env: Record<string, string>, config?: { defaultListId?: string }) {
